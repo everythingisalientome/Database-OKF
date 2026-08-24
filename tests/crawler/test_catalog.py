@@ -242,3 +242,159 @@ def test_unverified_engines_are_flagged():
         assert for_engine(engine).verified == (
             engine not in catalog.UNVERIFIED_ENGINES
         )
+
+
+# -- Tier B and C -----------------------------------------------------------
+#
+# The same rule as Tier A, with one difference: these blocks carry identifier
+# placeholders, and two of them are written in the catalog as a two-column
+# example rather than as a finished statement. So the verbatim check has an
+# extra clause — the expander must reproduce the catalog's own example, for
+# the columns the catalog itself names, character for character.
+
+ALL_TEMPLATES = catalog.all_templates()
+TEMPLATE_IDS_ = [f"{t.key}-{t.variant}" for t in ALL_TEMPLATES]
+
+
+@pytest.mark.parametrize("item", ALL_TEMPLATES, ids=TEMPLATE_IDS_)
+def test_template_is_verbatim_from_the_catalog(item, blocks):
+    catalog_sql = [sql for _heading, _context, sql in blocks]
+    assert item.sql in catalog_sql, (
+        f"{item.key}/{item.variant} is not a verbatim catalog block. "
+        "Templates are copies, not paraphrases — fix the copy, or propose "
+        "the change in the catalog first."
+    )
+
+
+@pytest.mark.parametrize("item", ALL_TEMPLATES, ids=TEMPLATE_IDS_)
+def test_template_records_the_heading_it_came_from(item, blocks):
+    headings = {heading for heading, _context, sql in blocks if sql == item.sql}
+    assert item.heading in headings
+
+
+@pytest.mark.parametrize("item", ALL_TEMPLATES, ids=TEMPLATE_IDS_)
+def test_the_batch_expander_reproduces_the_catalog_block(item):
+    """The expander is a transcription of a block, and this is what keeps it
+    one: rendered for ``c1`` and ``c2``, it must be the block."""
+    if not item.is_batched:
+        pytest.skip("not a batched block")
+    assert item.render(catalog.BATCH_EXAMPLE_COLUMNS) == item.sql
+
+
+@pytest.mark.parametrize("item", ALL_TEMPLATES, ids=TEMPLATE_IDS_)
+def test_a_template_names_the_identifiers_it_holds(item):
+    holes = set(re.findall(r"\{([a-z_]+)\}", item.sql))
+    assert "schema" in holes and "table" in holes
+    if item.is_batched:
+        assert "columns" in item.parameters
+    else:
+        assert holes <= {"schema", "table", "column"}
+
+
+@pytest.mark.parametrize("item", ALL_TEMPLATES, ids=TEMPLATE_IDS_)
+def test_a_template_is_not_registered_as_a_tier_a_statement(item):
+    """Tier A runs verbatim with no parameters. A template reaching that
+    registry would reach :func:`crawler.execute.run_statement`, which formats
+    nothing and checks nothing."""
+    assert item.sql not in [s.sql for s in ALL_STATEMENTS]
+    assert item.key in catalog.TIER_BC
+    assert item.query_id in catalog.TEMPLATE_IDS
+
+
+@pytest.mark.parametrize("item", ALL_TEMPLATES, ids=TEMPLATE_IDS_)
+def test_a_template_block_belongs_to_a_tier_b_or_c_heading(item, blocks):
+    headings = {heading for heading, _context, sql in blocks if sql == item.sql}
+    assert all(re.match(r"^(B|C)\d", heading) for heading in headings), (
+        f"{item.key} resolves to a non-Tier-B/C catalog block: {headings}"
+    )
+
+
+@pytest.mark.parametrize("engine", catalog.ENGINES)
+def test_every_engine_can_run_the_whole_measuring_pass(engine):
+    """B1, B2 with its length companion, B3, and both C1 forms. An engine
+    missing one measures less than the spec says it does."""
+    covered = {item.key for item in catalog.templates_for(engine)}
+    assert covered == set(catalog.TIER_BC)
+
+
+@pytest.mark.parametrize("engine", catalog.ENGINES)
+def test_templates_run_in_the_catalogs_order(engine):
+    keys = [item.key for item in catalog.templates_for(engine)]
+    assert keys == [k for k in catalog.TIER_BC if k in keys]
+    assert keys.index("B1") < keys.index("B2") < keys.index("B3")
+    assert keys.index("B3") < keys.index("B4") < keys.index("C1")
+
+
+@pytest.mark.parametrize("engine", catalog.ENGINES)
+def test_the_two_c1_forms_differ_only_in_the_cast(engine):
+    """One block for character columns, one that casts everything else to
+    VARCHAR first — the catalog's rule, as two statements rather than a
+    sentence nobody can run."""
+    plain = catalog.template(engine, "C1")
+    casting = catalog.template(engine, "C1-cast")
+    assert not plain.casts and casting.casts
+    assert "CAST(" not in plain.sql
+    assert "CAST(" in casting.sql
+    assert plain.query_id == casting.query_id == "C1"
+
+
+@pytest.mark.parametrize("engine", catalog.ENGINES)
+def test_every_c1_block_ranks_by_a_hash_not_by_the_value(engine):
+    """The bottom-k rule: arbitrary first-N sampling makes two databases keep
+    disjoint slices of one value space, and the measured overlap step 2 is
+    built on collapses toward zero. Teradata's block used to order by the
+    value; the correction is recorded in the proposals document."""
+    for key in ("C1", "C1-cast"):
+        sql = catalog.template(engine, key).sql
+        assert any(
+            token in sql for token in ("MD5(v)", "HASHBYTES('MD5', v)", "HASHROW(v)")
+        ), f"{engine}/{key} does not rank by a hash"
+
+
+@pytest.mark.parametrize("engine", catalog.ENGINES)
+def test_every_c1_block_normalizes_before_it_selects(engine):
+    """Selection ranks the normalized value, because that is what makes two
+    crawls keep the same slice of the value universe."""
+    for key in ("C1", "C1-cast"):
+        sql = catalog.template(engine, key).sql
+        assert "UPPER(" in sql
+        assert "TRIM(" in sql or "LTRIM(RTRIM(" in sql
+
+
+@pytest.mark.parametrize("engine", catalog.ENGINES)
+def test_every_c1_block_returns_a_raw_representative(engine):
+    """P13. Without it the applied normalization rules cannot be recorded,
+    and specs/00 decision 7 needs them recorded per column."""
+    for key in ("C1", "C1-cast"):
+        assert "AS raw" in catalog.template(engine, key).sql
+
+
+@pytest.mark.parametrize("engine", catalog.ENGINES)
+def test_every_sample_block_returns_the_groups_row_count(engine):
+    """The freq column (adopted P15): length statistics on rendered temporal
+    values are row-weighted, and only the grouping scan knows the weights."""
+    for key in ("C1", "C1-cast", "B4"):
+        assert "COUNT(*) AS freq" in catalog.template(engine, key).sql
+
+
+@pytest.mark.parametrize("engine", catalog.ENGINES)
+def test_the_b4_block_ranks_by_a_hash_and_keeps_no_raw(engine):
+    """B4 (adopted P14) reads values it may never persist — including from
+    sensitive columns, under the ruling — so unlike C1 it carries no raw
+    representative to tempt anyone, and like C1 its sample is deterministic."""
+    sql = catalog.template(engine, "B4").sql
+    assert "AS raw" not in sql
+    assert any(
+        token in sql for token in ("MD5(v)", "HASHBYTES('MD5', v)", "HASHROW(v)")
+    )
+    assert "CAST(" in sql
+
+
+@pytest.mark.parametrize("engine", catalog.ENGINES)
+def test_the_catalog_literals_bound_the_config(engine):
+    """The row limits are literals in the blocks, not parameters. Config may
+    ask for fewer values; asking for more means editing the catalog."""
+    for key in ("C1", "C1-cast"):
+        assert str(catalog.SAMPLE_CAP) in catalog.template(engine, key).sql
+    assert str(catalog.TOP_N) in catalog.template(engine, "B3").sql
+    assert str(catalog.FORMAT_CAP) in catalog.template(engine, "B4").sql

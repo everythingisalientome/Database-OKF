@@ -36,6 +36,14 @@ CHINOOK_TABLES = {
     "invoice_line", "media_type", "playlist", "playlist_track", "track",
 }
 
+#: Chinook 1.4.5's row count per table — the same numbers the fixture
+#: bundles publish, because both came from the same data.
+CHINOOK_ROW_COUNTS = {
+    "artist": 275, "album": 347, "track": 3503, "genre": 25, "media_type": 5,
+    "playlist": 18, "playlist_track": 8715, "customer": 59, "employee": 8,
+    "invoice": 412, "invoice_line": 2240,
+}
+
 #: Chinook's column count per table.
 CHINOOK_COLUMN_COUNTS = {
     "album": 3, "artist": 2, "customer": 13, "employee": 15, "genre": 2,
@@ -297,26 +305,26 @@ def test_postgres_runs_every_tier_a_query(postgres_crawl):
 
 
 def test_postgres_reads_a_row_estimate_for_every_table(postgres_crawl):
-    """P9 adopted, live. The rig analyses at load, so all 11 tables have a
-    reltuples of zero — and zero is the number the junk-table filter looks
-    for, which the pg_stats-driven block could not report at all.
-
-    They are estimates and say so: reltuples is what the planner believes,
-    and step 2 weighs overlap evidence by row count."""
+    """P9 adopted, live: every table reports a reltuples-based estimate. The
+    *values* are whatever the planner believes when the crawl runs — index
+    builds and autovacuum both move them — which is exactly why they are
+    recorded as estimates and why the measuring pass recounts (B1) instead
+    of believing them. The measured acceptance asserts the real counts."""
     stats = {s.table: s for s in postgres_crawl.table_stats}
     assert set(stats) == CHINOOK_TABLES
-    assert all(s.row_count == 0 for s in stats.values())
+    assert all(s.row_count is not None for s in stats.values())
     assert all(s.source == "stats-estimate" for s in stats.values())
     assert all(s.estimated for s in stats.values())
 
 
-def test_postgres_has_no_column_statistics_for_empty_tables(postgres_crawl):
-    """pg_stats holds a row per column that has data, and every rig table is
-    empty — so the column half is legitimately empty while the table half is
-    not. Session 3's data load fills this in."""
-    assert postgres_crawl.column_stats == []
+def test_postgres_column_statistics_are_marked_approximate(postgres_crawl):
+    """pg_stats holds a row per *analyzed* column, and autovacuum decides
+    when that happens — so coverage here is timing, not truth, and nothing
+    asserts it. What is truth: everything read this way is an estimate, so
+    B2 still runs and the measured numbers never come from here."""
+    assert all(s.approximate for s in postgres_crawl.column_stats)
     a6 = next(q for q in postgres_crawl.queries if q.key == "A6")
-    assert a6.status == "ok" and a6.rows == 11
+    assert a6.status == "ok" and a6.rows >= 11
 
 
 def test_postgres_sees_more_tables_than_it_catalogs(postgres_crawl):
@@ -355,16 +363,16 @@ def test_sqlserver_reads_dictionary_row_counts(sqlserver_crawl):
     stats = {s.table: s for s in sqlserver_crawl.table_stats}
     assert set(stats) == CHINOOK_TABLES
     assert all(s.source == "stats" for s in stats.values())
-    # dm_db_partition_stats counts rows rather than estimating them.
+    # dm_db_partition_stats counts rows rather than estimating them, so
+    # unlike PostgreSQL's estimates these ARE the Chinook row counts.
     assert all(not s.estimated for s in stats.values())
-    # Schema-only rig: the counts are real, and they are zero.
-    assert all(s.row_count == 0 for s in stats.values())
+    assert {t: s.row_count for t, s in stats.items()} == CHINOOK_ROW_COUNTS
 
 
 def test_sqlserver_column_statistics_are_marked_approximate(sqlserver_crawl):
-    """Whatever the histograms hold on a schema-only rig — the rig has no
-    rows, so this can legitimately be empty — anything read this way is an
-    estimate, and B2 must still run near a gate boundary."""
+    """Histogram sums are estimates whatever they hold, and B2 must still
+    run near a gate boundary — which on this rig means everywhere, since
+    approximate statistics never satisfy the stats-first check."""
     assert all(s.approximate for s in sqlserver_crawl.column_stats)
 
 

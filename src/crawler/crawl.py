@@ -19,6 +19,12 @@ between a crawl you can trust and one you cannot:
   gap, and it downgrades reconciliation to INCOMPLETE.
 * **Nothing is dropped silently.** Anything the crawl could not represent
   faithfully lands in ``result.warnings`` and travels with the bundle.
+
+``measure=True`` adds the Tier B/C pass (:mod:`crawler.measure`) between A6
+and A5, which is the catalog's run order. It goes there rather than after the
+crawl for one reason: A5 is what turns a failed statement into an INCOMPLETE
+bundle, and an account that can read the dictionary but not the data has a
+grant gap that reconciliation has to see.
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ from .catalog import COLUMN_STATS, REQUIRED, TABLE_STATS, TIER_A
 from .config import CrawlConfig
 from .errors import QueryError
 from .execute import Connection, run_statement
+from .measure import measure as measure_pass
 from .results import (
     COMPLETE,
     INCOMPLETE,
@@ -54,8 +61,13 @@ def crawl(
     *,
     adapter: Adapter | None = None,
     today: date | None = None,
+    measure: bool = False,
 ) -> CrawlResult:
-    """Run Tier A against ``connection`` and return the result."""
+    """Run Tier A against ``connection`` and return the result.
+
+    With ``measure``, the Tier B/C measuring pass runs too, in the catalog's
+    place for it: after the dictionary is read and before reconciliation.
+    """
     adapter = adapter or for_engine(config.engine)
     result = CrawlResult(
         database=config.database,
@@ -160,6 +172,16 @@ def crawl(
             )
     result.table_stats.sort(key=lambda s: (s.schema, s.table))
     result.column_stats.sort(key=lambda s: (s.schema, s.table, s.column))
+
+    if measure:
+        measure_pass(
+            connection,
+            config,
+            result,
+            adapter=adapter,
+            today=result.crawl_date,
+            failures=runner.failures,
+        )
 
     result.reconciliation = _reconcile(runner, config, result)
     return result

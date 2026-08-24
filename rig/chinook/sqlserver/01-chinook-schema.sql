@@ -1,9 +1,16 @@
 -- Chinook schema for the crawler acceptance rig — SQL Server.
 --
+-- Every character column carries COLLATE Latin1_General_100_BIN2: the
+-- fixture bundles were generated with codepoint comparisons, and
+-- MIN/MAX/DISTINCT only reproduce them when the engine compares the same
+-- way. The collation sits on the columns, not the server or database — a
+-- binary collation any higher makes identifier lookup case-sensitive and
+-- breaks the catalog's lowercase information_schema blocks.
+--
 -- Same 11 tables, same keys, same indexes as the PostgreSQL script, in this
 -- engine's own types: nvarchar / int / numeric(10,2) / datetime, as the
 -- canonical Chinook SQL Server distribution declares them. The crawler is
--- expected to canonicalise nvarchar(160) to NVARCHAR(160) and datetime to
+-- expected to canonicalise nvarchar(160) COLLATE Latin1_General_100_BIN2 to NVARCHAR(160) and datetime to
 -- TIMESTAMP — the point of the cross-engine acceptance is that the same
 -- logical column reads the same way from two different dictionaries, not
 -- that both engines pretend to be PostgreSQL.
@@ -19,13 +26,13 @@ GO
 
 CREATE TABLE artist (
     artist_id  int           NOT NULL,
-    name       nvarchar(120) NULL,
+    name       nvarchar(120) COLLATE Latin1_General_100_BIN2 NULL,
     CONSTRAINT pk_artist PRIMARY KEY (artist_id)
 );
 
 CREATE TABLE album (
     album_id   int           NOT NULL,
-    title      nvarchar(160) NOT NULL,
+    title      nvarchar(160) COLLATE Latin1_General_100_BIN2 NOT NULL,
     artist_id  int           NOT NULL,
     CONSTRAINT pk_album PRIMARY KEY (album_id),
     CONSTRAINT fk_album_artist FOREIGN KEY (artist_id) REFERENCES artist (artist_id)
@@ -33,23 +40,23 @@ CREATE TABLE album (
 
 CREATE TABLE genre (
     genre_id   int           NOT NULL,
-    name       nvarchar(120) NULL,
+    name       nvarchar(120) COLLATE Latin1_General_100_BIN2 NULL,
     CONSTRAINT pk_genre PRIMARY KEY (genre_id)
 );
 
 CREATE TABLE media_type (
     media_type_id int        NOT NULL,
-    name          nvarchar(120) NULL,
+    name          nvarchar(120) COLLATE Latin1_General_100_BIN2 NULL,
     CONSTRAINT pk_media_type PRIMARY KEY (media_type_id)
 );
 
 CREATE TABLE track (
     track_id      int           NOT NULL,
-    name          nvarchar(200) NOT NULL,
+    name          nvarchar(200) COLLATE Latin1_General_100_BIN2 NOT NULL,
     album_id      int           NULL,
     media_type_id int           NOT NULL,
     genre_id      int           NULL,
-    composer      nvarchar(220) NULL,
+    composer      nvarchar(220) COLLATE Latin1_General_100_BIN2 NULL,
     milliseconds  int           NOT NULL,
     bytes         int           NULL,
     unit_price    numeric(10,2) NOT NULL,
@@ -62,7 +69,7 @@ CREATE TABLE track (
 
 CREATE TABLE playlist (
     playlist_id int           NOT NULL,
-    name        nvarchar(120) NULL,
+    name        nvarchar(120) COLLATE Latin1_General_100_BIN2 NULL,
     CONSTRAINT pk_playlist PRIMARY KEY (playlist_id)
 );
 
@@ -78,20 +85,20 @@ CREATE TABLE playlist_track (
 
 CREATE TABLE employee (
     employee_id int          NOT NULL,
-    last_name   nvarchar(20) NOT NULL,
-    first_name  nvarchar(20) NOT NULL,
-    title       nvarchar(30) NULL,
+    last_name   nvarchar(20) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    first_name  nvarchar(20) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    title       nvarchar(30) COLLATE Latin1_General_100_BIN2 NULL,
     reports_to  int          NULL,
     birth_date  datetime     NULL,
     hire_date   datetime     NULL,
-    address     nvarchar(70) NULL,
-    city        nvarchar(40) NULL,
-    state       nvarchar(40) NULL,
-    country     nvarchar(40) NULL,
-    postal_code nvarchar(10) NULL,
-    phone       nvarchar(24) NULL,
-    fax         nvarchar(24) NULL,
-    email       nvarchar(60) NULL,
+    address     nvarchar(70) COLLATE Latin1_General_100_BIN2 NULL,
+    city        nvarchar(40) COLLATE Latin1_General_100_BIN2 NULL,
+    state       nvarchar(40) COLLATE Latin1_General_100_BIN2 NULL,
+    country     nvarchar(40) COLLATE Latin1_General_100_BIN2 NULL,
+    postal_code nvarchar(10) COLLATE Latin1_General_100_BIN2 NULL,
+    phone       nvarchar(24) COLLATE Latin1_General_100_BIN2 NULL,
+    fax         nvarchar(24) COLLATE Latin1_General_100_BIN2 NULL,
+    email       nvarchar(60) COLLATE Latin1_General_100_BIN2 NULL,
     CONSTRAINT pk_employee PRIMARY KEY (employee_id),
     CONSTRAINT fk_employee_reports_to FOREIGN KEY (reports_to)
         REFERENCES employee (employee_id)
@@ -99,17 +106,17 @@ CREATE TABLE employee (
 
 CREATE TABLE customer (
     customer_id    int          NOT NULL,
-    first_name     nvarchar(40) NOT NULL,
-    last_name      nvarchar(20) NOT NULL,
-    company        nvarchar(80) NULL,
-    address        nvarchar(70) NULL,
-    city           nvarchar(40) NULL,
-    state          nvarchar(40) NULL,
-    country        nvarchar(40) NULL,
-    postal_code    nvarchar(10) NULL,
-    phone          nvarchar(24) NULL,
-    fax            nvarchar(24) NULL,
-    email          nvarchar(60) NOT NULL,
+    first_name     nvarchar(40) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    last_name      nvarchar(20) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    company        nvarchar(80) COLLATE Latin1_General_100_BIN2 NULL,
+    address        nvarchar(70) COLLATE Latin1_General_100_BIN2 NULL,
+    city           nvarchar(40) COLLATE Latin1_General_100_BIN2 NULL,
+    state          nvarchar(40) COLLATE Latin1_General_100_BIN2 NULL,
+    country        nvarchar(40) COLLATE Latin1_General_100_BIN2 NULL,
+    postal_code    nvarchar(10) COLLATE Latin1_General_100_BIN2 NULL,
+    phone          nvarchar(24) COLLATE Latin1_General_100_BIN2 NULL,
+    fax            nvarchar(24) COLLATE Latin1_General_100_BIN2 NULL,
+    email          nvarchar(60) COLLATE Latin1_General_100_BIN2 NOT NULL,
     support_rep_id int          NULL,
     CONSTRAINT pk_customer PRIMARY KEY (customer_id),
     CONSTRAINT fk_customer_support_rep FOREIGN KEY (support_rep_id)
@@ -120,11 +127,11 @@ CREATE TABLE invoice (
     invoice_id          int           NOT NULL,
     customer_id         int           NOT NULL,
     invoice_date        datetime      NOT NULL,
-    billing_address     nvarchar(70)  NULL,
-    billing_city        nvarchar(40)  NULL,
-    billing_state       nvarchar(40)  NULL,
-    billing_country     nvarchar(40)  NULL,
-    billing_postal_code nvarchar(10)  NULL,
+    billing_address     nvarchar(70) COLLATE Latin1_General_100_BIN2  NULL,
+    billing_city        nvarchar(40) COLLATE Latin1_General_100_BIN2  NULL,
+    billing_state       nvarchar(40) COLLATE Latin1_General_100_BIN2  NULL,
+    billing_country     nvarchar(40) COLLATE Latin1_General_100_BIN2  NULL,
+    billing_postal_code nvarchar(10) COLLATE Latin1_General_100_BIN2  NULL,
     total               numeric(10,2) NOT NULL,
     CONSTRAINT pk_invoice PRIMARY KEY (invoice_id),
     CONSTRAINT fk_invoice_customer FOREIGN KEY (customer_id)

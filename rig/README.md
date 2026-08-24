@@ -37,24 +37,29 @@ Starting the SQL Server service sets `ACCEPT_EULA=Y`, which accepts
 Microsoft's licence terms for that container image. Whoever runs
 `docker compose up` accepts them.
 
-## Schema only — no rows
+## Data and collation
 
-Both scripts create the 11 Chinook tables with their columns, primary keys,
-foreign keys and secondary indexes, and insert nothing. Session 2 crawls
-Tier A, which reads the dictionary and never touches a row, so the schema is
-the whole load.
+Both databases hold the full Chinook 1.4.5 data — the same rows the fixture
+bundles under `tests/fixtures/okf/` were generated from. The load files
+(`02-chinook-data.sql`) are generated verbatim from
+`tests/fixtures/source/Chinook_PostgreSql.sql` by
+`rig/chinook/tools/extract-data.py`; rerun the tool if the source ever
+changes, and commit both together.
 
-**Session 3 will need the real Chinook data**, digit for digit, because its
-acceptance is "measured numbers == fixture numbers". Two things to sort out
-before then:
+Comparisons are binary, deliberately: the fixture generator measured with
+Python's codepoint comparisons, and MIN/MAX/DISTINCT only reproduce its
+numbers when the engine compares the same way. PostgreSQL gets it from
+`initdb --locale=C`; SQL Server gets `COLLATE Latin1_General_100_BIN2` on
+every character *column* — not on the server or database, because a binary
+collation there makes identifier lookup case-sensitive and the catalog's
+lowercase `information_schema` blocks stop resolving. That failure mode is
+real and was hit; the comment in `docker-compose.yml` records it.
 
-* `README.md` documents `tests/fixtures/source/` as holding "Chinook SQL +
-  the fixture generator script". That directory does not exist in the repo,
-  so the provenance of `tests/fixtures/okf/` is currently unreproducible.
-* The fixtures simulate a *split* estate — Chinook divided across
-  `MUSICSTORE_CORE` and `MUSICSTORE_SALES`. This rig is one undivided
-  database per engine. Session 3's data load has to decide which of the two
-  it is reproducing.
+The fixtures simulate a *split* estate — Chinook divided across
+`MUSICSTORE_CORE` and `MUSICSTORE_SALES` — while the rig is one undivided
+database per engine. The measured acceptance
+(`tests/crawler/test_acceptance_measured.py`) therefore compares per-column
+*numbers*, which do not care about the split, never bundle structure.
 
 ## Naming
 
@@ -86,13 +91,18 @@ tables. What was dropped is recorded in the result's `scope`, so the
 reconciliation arithmetic can add the system tables back before comparing
 with A5's account-wide count.
 
-Two things the acceptance pins that are easy to misread as bugs:
+Session 3 adds the measured acceptance on top
+(`test_acceptance_measured.py`): a full `--measure` crawl of each engine,
+compared with the fixture bundles' published numbers digit for digit — row
+counts, distincts, rates, bounds, length statistics, formats, top-N, and
+every fingerprint payload byte for byte. One datum is asserted at its
+measured value instead of the fixture's: the generator took temporal min/max
+over rendered *strings*, so `invoice.invoice_date`'s fixture max is the
+lexicographic `'2025/9/7'` where the chronologically last invoice is
+`2025/12/22`. The test names it as a known fixture artifact.
 
-* **Row counts are zero and they are estimates.** The rig runs `ANALYZE` at
-  load, so all 11 tables report `row_count: 0` with
-  `row_count_source: stats-estimate` — PostgreSQL's `reltuples` is what the
-  planner believes, not a measurement. Column statistics are empty, because
-  `pg_stats` holds a row per column that has *data* and every rig table is
-  empty. Session 3's data load fills the column half in.
-* **SQL Server's column statistics are marked approximate** — they are
-  histogram sums, and B2 still has to run near a gate boundary.
+One thing the acceptance pins that is easy to misread as a bug:
+**SQL Server's column statistics are marked approximate** — they are
+histogram sums, and B2 still runs where one lands near a gate boundary
+(PostgreSQL's `pg_stats` estimates likewise), which is why every measured
+profile on this rig reports `source: live`.

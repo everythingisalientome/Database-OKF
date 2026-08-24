@@ -420,6 +420,295 @@ class Reconciliation:
         )
 
 
+# ---------------------------------------------------------------------------
+# The measuring pass — what B1/B2/B3/C1 produced
+# ---------------------------------------------------------------------------
+
+#: Decimal places for the rates the OKF publishes. Four, because that is what
+#: the fixture bundles carry and because the fifth digit of a ratio measured
+#: against an estimated denominator is noise.
+RATE_PRECISION = 4
+
+#: Decimal places for average character length.
+LENGTH_PRECISION = 1
+
+#: Why a column carries no top-N values or no fingerprint. Every absence has
+#: one of these against it: "no fingerprint" and "fingerprint suppressed
+#: because the column is sensitive" are different facts and step 2 must not
+#: have to guess which it is looking at.
+GATE_CARDINALITY = "cardinality-gate"
+GATE_DISTINCT = "distinct-gate"
+SENSITIVE = "sensitive-listed"
+BUDGET_DENIED = "budget"
+JUNK_SUSPECT = "junk-suspect"
+#: A temporal value the canonical rendering could not read. The whole
+#: fingerprint is withheld — a sample that lost some values is no longer the
+#: bottom-k it claims to be.
+UNPARSEABLE_TEMPORAL = "unparseable-temporal"
+
+#: Table flags, the specs/01 frontmatter vocabulary.
+FLAG_JUNK = "junk-suspect"
+FLAG_EMPTY = "empty"
+
+
+def _rate(value, precision=RATE_PRECISION):
+    return None if value is None else round(float(value), precision)
+
+
+@dataclass(frozen=True)
+class TopValue:
+    """One row of B3. ``percent`` is against the non-null count, not the row
+    count: on a column that is 80% NULL, a value present in every remaining
+    row characterises the column completely, and dividing by the row count
+    would report it as a fifth of one."""
+
+    value: str
+    frequency: int
+    percent: int
+
+    def to_obj(self) -> dict:
+        return {
+            "value": self.value,
+            "frequency": self.frequency,
+            "percent": self.percent,
+        }
+
+    @classmethod
+    def from_obj(cls, obj: dict) -> TopValue:
+        return cls(obj["value"], obj["frequency"], obj["percent"])
+
+
+@dataclass(frozen=True)
+class Fingerprint:
+    """A hashed C1 sample, ready to be written beside a bundle.
+
+    ``count`` is how many distinct normalized values the column has, and
+    ``len(hashes)`` how many were kept: they differ only when the sample cap
+    bit, which is what makes the truncation visible to step 2 rather than
+    silently changing what an overlap is measured over.
+    """
+
+    schema: str
+    table: str
+    column: str
+    algo: str
+    normalization: tuple[str, ...]
+    sample_cap: int
+    count: int
+    hashes: tuple[str, ...]
+
+    @property
+    def path(self) -> str:
+        """Bundle-relative payload path (specs/04, file mechanics)."""
+        return f"fingerprints/{self.table}.{self.column}.json"
+
+    @property
+    def truncated(self) -> bool:
+        return self.count > len(self.hashes)
+
+    def to_payload(self) -> dict:
+        """The payload as ``okf.Fingerprint`` reads it, in fixture key order."""
+        return {
+            "algo": self.algo,
+            "normalization": list(self.normalization),
+            "sample_cap": self.sample_cap,
+            "count": self.count,
+            "hashes": list(self.hashes),
+        }
+
+    def to_obj(self) -> dict:
+        return {
+            "schema": self.schema,
+            "table": self.table,
+            "column": self.column,
+            "path": self.path,
+            **self.to_payload(),
+        }
+
+    @classmethod
+    def from_obj(cls, obj: dict) -> Fingerprint:
+        return cls(
+            schema=obj["schema"],
+            table=obj["table"],
+            column=obj["column"],
+            algo=obj["algo"],
+            normalization=tuple(obj.get("normalization") or ()),
+            sample_cap=obj["sample_cap"],
+            count=obj["count"],
+            hashes=tuple(obj.get("hashes") or ()),
+        )
+
+
+@dataclass(frozen=True)
+class TableProfile:
+    """What the measuring pass learned about one table (B1, plus policy).
+
+    ``source`` is the specs/01 ``row_count_source`` vocabulary. ``flags`` is
+    the frontmatter list: a table matching a junk pattern or holding no rows
+    is cataloged and flagged, then profiled minimally — it is cheap to record
+    that ``ACCOUNT_BKP`` exists and expensive to profile it, and step 3 needs
+    to know not to route a query through it.
+    """
+
+    schema: str
+    table: str
+    row_count: int | None = None
+    source: str = LIVE
+    stats_date: date | None = None
+    flags: tuple[str, ...] = ()
+    #: False when the pass deliberately did not scan: junk, empty, or a
+    #: budget refusal. Always with a note saying which.
+    profiled: bool = True
+    note: str = ""
+
+    def __post_init__(self):
+        if self.source not in ROW_COUNT_SOURCES:
+            raise ValueError(
+                f"row_count_source must be one of {ROW_COUNT_SOURCES}, "
+                f"got {self.source!r}"
+            )
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.schema}.{self.table}"
+
+    def to_obj(self) -> dict:
+        return {
+            "schema": self.schema,
+            "table": self.table,
+            "row_count": self.row_count,
+            "source": self.source,
+            "stats_date": _iso(self.stats_date),
+            "flags": list(self.flags),
+            "profiled": self.profiled,
+            "note": self.note,
+        }
+
+    @classmethod
+    def from_obj(cls, obj: dict) -> TableProfile:
+        return cls(
+            schema=obj["schema"],
+            table=obj["table"],
+            row_count=obj.get("row_count"),
+            source=obj.get("source", LIVE),
+            stats_date=_as_date(obj.get("stats_date")),
+            flags=tuple(obj.get("flags") or ()),
+            profiled=obj.get("profiled", True),
+            note=obj.get("note", ""),
+        )
+
+
+@dataclass(frozen=True)
+class ColumnProfile:
+    """One column's measured profile — B2's numbers and everything derived.
+
+    The derived fields are stored rather than computed on read because they
+    are what the OKF publishes and what step 2 gates on, and because the
+    denominators differ: ``null_rate`` is against the row count and
+    ``distinct_ratio`` against the non-null count. A consumer recomputing
+    either from the wrong one would be wrong quietly.
+    """
+
+    schema: str
+    table: str
+    column: str
+    #: Where the numbers came from: a B2 scan, or the dictionary.
+    source: str = LIVE
+    stats_date: date | None = None
+    row_count: int | None = None
+    non_null_count: int | None = None
+    null_count: int | None = None
+    distinct_count: int | None = None
+    #: Rendered as text, because that is what the OKF carries and what a
+    #: cross-engine comparison can be made of.
+    min_value: str | None = None
+    max_value: str | None = None
+    min_length: int | None = None
+    max_length: int | None = None
+    avg_length: float | None = None
+    null_rate: float | None = None
+    distinct_ratio: float | None = None
+    dense_sequence: bool = False
+    approximate: bool = False
+    sensitive: bool = False
+    #: The plurality format category (catalog B4 / formats vocabulary), or
+    #: None where nothing could be classified.
+    format: str | None = None
+    top_values: tuple[TopValue, ...] = ()
+    fingerprint: Fingerprint | None = None
+    #: Why top-N or a fingerprint is absent. Never empty when either is.
+    suppressed: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.schema}.{self.table}.{self.column}"
+
+    def to_obj(self) -> dict:
+        return {
+            "schema": self.schema,
+            "table": self.table,
+            "column": self.column,
+            "source": self.source,
+            "stats_date": _iso(self.stats_date),
+            "row_count": self.row_count,
+            "non_null_count": self.non_null_count,
+            "null_count": self.null_count,
+            "distinct_count": self.distinct_count,
+            "min_value": self.min_value,
+            "max_value": self.max_value,
+            "min_length": self.min_length,
+            "max_length": self.max_length,
+            "avg_length": self.avg_length,
+            "null_rate": self.null_rate,
+            "distinct_ratio": self.distinct_ratio,
+            "dense_sequence": self.dense_sequence,
+            "approximate": self.approximate,
+            "sensitive": self.sensitive,
+            "format": self.format,
+            "top_values": [v.to_obj() for v in self.top_values],
+            "fingerprint": (
+                self.fingerprint.to_obj() if self.fingerprint else None
+            ),
+            "suppressed": list(self.suppressed),
+            "notes": list(self.notes),
+        }
+
+    @classmethod
+    def from_obj(cls, obj: dict) -> ColumnProfile:
+        fingerprint = obj.get("fingerprint")
+        return cls(
+            schema=obj["schema"],
+            table=obj["table"],
+            column=obj["column"],
+            source=obj.get("source", LIVE),
+            stats_date=_as_date(obj.get("stats_date")),
+            row_count=obj.get("row_count"),
+            non_null_count=obj.get("non_null_count"),
+            null_count=obj.get("null_count"),
+            distinct_count=obj.get("distinct_count"),
+            min_value=obj.get("min_value"),
+            max_value=obj.get("max_value"),
+            min_length=obj.get("min_length"),
+            max_length=obj.get("max_length"),
+            avg_length=obj.get("avg_length"),
+            null_rate=obj.get("null_rate"),
+            distinct_ratio=obj.get("distinct_ratio"),
+            dense_sequence=obj.get("dense_sequence", False),
+            approximate=obj.get("approximate", False),
+            sensitive=obj.get("sensitive", False),
+            format=obj.get("format"),
+            top_values=tuple(
+                TopValue.from_obj(o) for o in obj.get("top_values") or ()
+            ),
+            fingerprint=(
+                Fingerprint.from_obj(fingerprint) if fingerprint else None
+            ),
+            suppressed=tuple(obj.get("suppressed") or ()),
+            notes=tuple(obj.get("notes") or ()),
+        )
+
+
 @dataclass
 class CrawlResult:
     """Everything one Tier A crawl of one database produced."""
@@ -435,6 +724,12 @@ class CrawlResult:
     indexes: list[Index] = field(default_factory=list)
     table_stats: list[TableStats] = field(default_factory=list)
     column_stats: list[ColumnStats] = field(default_factory=list)
+    #: The measuring pass. Empty on a Tier A-only crawl, which is a
+    #: complete crawl in its own right: the inventory does not depend on it.
+    table_profiles: list[TableProfile] = field(default_factory=list)
+    column_profiles: list[ColumnProfile] = field(default_factory=list)
+    #: True once the measuring pass has run over this result.
+    measured: bool = False
     reconciliation: Reconciliation | None = None
     scope: Scope = field(default_factory=lambda: Scope())
     queries: list[QueryRun] = field(default_factory=list)
@@ -471,6 +766,9 @@ class CrawlResult:
             "indexes": [i.to_obj() for i in self.indexes],
             "table_stats": [s.to_obj() for s in self.table_stats],
             "column_stats": [s.to_obj() for s in self.column_stats],
+            "measured": self.measured,
+            "table_profiles": [p.to_obj() for p in self.table_profiles],
+            "column_profiles": [p.to_obj() for p in self.column_profiles],
             "reconciliation": (
                 self.reconciliation.to_obj() if self.reconciliation else None
             ),
@@ -495,6 +793,13 @@ class CrawlResult:
             indexes=[Index.from_obj(o) for o in obj.get("indexes", [])],
             table_stats=[TableStats.from_obj(o) for o in obj.get("table_stats", [])],
             column_stats=[ColumnStats.from_obj(o) for o in obj.get("column_stats", [])],
+            measured=obj.get("measured", False),
+            table_profiles=[
+                TableProfile.from_obj(o) for o in obj.get("table_profiles", [])
+            ],
+            column_profiles=[
+                ColumnProfile.from_obj(o) for o in obj.get("column_profiles", [])
+            ],
             reconciliation=(
                 Reconciliation.from_obj(reconciliation) if reconciliation else None
             ),

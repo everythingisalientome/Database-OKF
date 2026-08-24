@@ -363,3 +363,476 @@ def all_statements() -> list[Statement]:
             if stmt not in seen:
                 seen.append(stmt)
     return seen
+
+
+# ---------------------------------------------------------------------------
+# Tier B / Tier C — the measuring pass
+#
+# These blocks carry identifier placeholders, which is the whole difference
+# from Tier A: nothing may fill one unless the crawl's own A1/A2 output
+# produced it. :mod:`crawler.bind` is the only place that fills them, and
+# :func:`crawler.execute.run_statement` refuses a parameterised statement
+# outright, so a template cannot reach a cursor unbound.
+#
+# Two blocks in the catalog are written as a two-column example with a
+# ``/* ... chunked ... */`` comment rather than as a finished statement,
+# because batching is the point: one scan profiles many columns. They are
+# registered as a :class:`Batch` — a prefix, a per-column fragment, and a
+# suffix — and ``tests/crawler/test_catalog.py`` renders each for the two
+# columns the catalog names and asserts the result is the catalog block,
+# character for character. The expander is a transcription of the block, and
+# the test is what keeps it one.
+# ---------------------------------------------------------------------------
+
+#: What a template's rows can be read as.
+ROW_COUNT = "row_count"
+COLUMN_AGGREGATES = "column_aggregates"
+COLUMN_LENGTHS = "column_lengths"
+TOP_VALUES = "top_values"
+FORMAT_SAMPLE = "format_sample"
+VALUE_SAMPLE = "value_sample"
+
+#: Template keys in the catalog's run order: B1, B2, B3, B4, C1.
+TIER_B = ("B1", "B2", "B2-length", "B3", "B4")
+TIER_C = ("C1", "C1-cast")
+TIER_BC = TIER_B + TIER_C
+
+#: Catalog query ids the templates implement.
+TEMPLATE_IDS = ("B1", "B2", "B3", "B4", "C1")
+
+#: Sample ceiling written into the C1 blocks. A configured ``k`` below this is
+#: applied to the returned rows (they arrive in selection-hash order, so the
+#: first k of them are the bottom-k); a configured ``k`` above it cannot be
+#: honoured without editing the catalog, and is a configuration error.
+SAMPLE_CAP = 5000
+
+#: Top-N size written into the B3 blocks, for the same reason.
+TOP_N = 20
+
+#: Sample ceiling written into the B4 blocks. Classification is a plurality
+#: judgement; 500 distinct values decide it as well as 5000 would, at a tenth
+#: of the transfer, and the values are dropped the moment they are classified.
+FORMAT_CAP = 500
+
+#: The column names the catalog's batched examples use, in order. The
+#: expander must reproduce the block exactly for these.
+BATCH_EXAMPLE_COLUMNS = ("c1", "c2")
+
+
+@dataclass(frozen=True)
+class Batch:
+    """A batched block, as prefix + repeated fragment + suffix.
+
+    ``fragment`` holds ``{column}`` once per aggregate. Rendering for the
+    catalog's own example columns must reproduce the block verbatim, which is
+    what makes this a transcription rather than a paraphrase.
+    """
+
+    prefix: str
+    fragment: str
+    separator: str
+    suffix: str
+    #: Values one column contributes to the result row.
+    width: int
+
+    def render(self, columns) -> str:
+        columns = tuple(columns)
+        if not columns:
+            raise ValueError("a batched statement needs at least one column")
+        body = self.separator.join(
+            self.fragment.replace("{column}", column) for column in columns
+        )
+        return f"{self.prefix}{body}{self.suffix}"
+
+
+@dataclass(frozen=True)
+class Template:
+    """One Tier B/C catalog block, with its identifier placeholders."""
+
+    key: str
+    #: Catalog query id (``C1`` for both C1 blocks).
+    query_id: str
+    variant: str
+    #: Verbatim block text. For a batched block this is the catalog's
+    #: two-column example; :attr:`batch` is what renders a real one.
+    sql: str
+    heading: str
+    provides: tuple[str, ...]
+    parameters: tuple[str, ...]
+    batch: Batch | None = None
+    #: True for the blocks that cast a non-character column to VARCHAR.
+    casts: bool = False
+
+    @property
+    def is_batched(self) -> bool:
+        return self.batch is not None
+
+    def render(self, columns=None) -> str:
+        """The statement text, still holding ``{schema}``/``{table}``.
+
+        Binding those — and checking every identifier against the crawl's own
+        allow-list — is :mod:`crawler.bind`'s job, not this module's.
+        """
+        if self.batch is None:
+            return self.sql
+        return self.batch.render(columns or BATCH_EXAMPLE_COLUMNS)
+
+
+_CHUNK_SUFFIX = (
+    "\n       /* ... chunked to stay within engine memory ... */"
+    "\nFROM {schema}.{table};"
+)
+
+B1_ANSI = Template(
+    key="B1",
+    query_id="B1",
+    variant="ansi",
+    heading="B1. Row count (per table)",
+    provides=(ROW_COUNT,),
+    parameters=("schema", "table"),
+    sql="""SELECT COUNT(*) AS row_count FROM {schema}.{table};""",
+)
+
+B1_TERADATA = Template(
+    key="B1",
+    query_id="B1",
+    variant="teradata",
+    heading="B1-TD. Row count",
+    provides=(ROW_COUNT,),
+    parameters=("schema", "table"),
+    sql="""SELECT COUNT(*) AS row_count FROM {schema}.{table};""",
+)
+
+B2_ANSI = Template(
+    key="B2",
+    query_id="B2",
+    variant="ansi",
+    heading="B2. Column profile — BATCHED (one scan profiles many columns)",
+    provides=(COLUMN_AGGREGATES,),
+    parameters=("schema", "table", "columns"),
+    sql="""SELECT COUNT(*),
+       COUNT(c1), COUNT(DISTINCT c1), MIN(c1), MAX(c1),
+       COUNT(c2), COUNT(DISTINCT c2), MIN(c2), MAX(c2)
+       /* ... chunked to stay within engine memory ... */
+FROM {schema}.{table};""",
+    batch=Batch(
+        prefix="SELECT COUNT(*),\n       ",
+        fragment=(
+            "COUNT({column}), COUNT(DISTINCT {column}), "
+            "MIN({column}), MAX({column})"
+        ),
+        separator=",\n       ",
+        suffix=_CHUNK_SUFFIX,
+        width=4,
+    ),
+)
+
+B2_LENGTH_ANSI = Template(
+    key="B2-length",
+    query_id="B2",
+    variant="ansi",
+    heading="B2. Column profile — BATCHED (one scan profiles many columns)",
+    provides=(COLUMN_LENGTHS,),
+    parameters=("schema", "table", "columns"),
+    sql="""SELECT MIN(LENGTH(c1)), MAX(LENGTH(c1)), AVG(LENGTH(c1)),
+       MIN(LENGTH(c2)), MAX(LENGTH(c2)), AVG(LENGTH(c2))
+       /* ... chunked to stay within engine memory ... */
+FROM {schema}.{table};""",
+    batch=Batch(
+        prefix="SELECT ",
+        fragment=(
+            "MIN(LENGTH({column})), MAX(LENGTH({column})), AVG(LENGTH({column}))"
+        ),
+        separator=",\n       ",
+        suffix=_CHUNK_SUFFIX,
+        width=3,
+    ),
+)
+
+B2_LENGTH_SQLSERVER = Template(
+    key="B2-length",
+    query_id="B2",
+    variant="sqlserver",
+    heading="B2. Column profile — BATCHED (one scan profiles many columns)",
+    provides=(COLUMN_LENGTHS,),
+    parameters=("schema", "table", "columns"),
+    sql="""SELECT MIN(LEN(c1)), MAX(LEN(c1)), AVG(CAST(LEN(c1) AS float)),
+       MIN(LEN(c2)), MAX(LEN(c2)), AVG(CAST(LEN(c2) AS float))
+       /* ... chunked to stay within engine memory ... */
+FROM {schema}.{table};""",
+    batch=Batch(
+        prefix="SELECT ",
+        fragment=(
+            "MIN(LEN({column})), MAX(LEN({column})), "
+            "AVG(CAST(LEN({column}) AS float))"
+        ),
+        separator=",\n       ",
+        suffix=_CHUNK_SUFFIX,
+        width=3,
+    ),
+)
+
+B2_LENGTH_TERADATA = Template(
+    key="B2-length",
+    query_id="B2",
+    variant="teradata",
+    heading="B2-TD. Column profile",
+    provides=(COLUMN_LENGTHS,),
+    parameters=("schema", "table", "columns"),
+    sql="""SELECT MIN(CHARACTER_LENGTH(c1)), MAX(CHARACTER_LENGTH(c1)), AVG(CHARACTER_LENGTH(c1)),
+       MIN(CHARACTER_LENGTH(c2)), MAX(CHARACTER_LENGTH(c2)), AVG(CHARACTER_LENGTH(c2))
+       /* ... chunked to stay within engine memory ... */
+FROM {schema}.{table};""",
+    batch=Batch(
+        prefix="SELECT ",
+        fragment=(
+            "MIN(CHARACTER_LENGTH({column})), MAX(CHARACTER_LENGTH({column})), "
+            "AVG(CHARACTER_LENGTH({column}))"
+        ),
+        separator=",\n       ",
+        suffix=_CHUNK_SUFFIX,
+        width=3,
+    ),
+)
+
+B3_ANSI = Template(
+    key="B3",
+    query_id="B3",
+    variant="ansi",
+    heading="B3. Top-N frequent values (per column; gated — see note)",
+    provides=(TOP_VALUES,),
+    parameters=("schema", "table", "column"),
+    sql="""SELECT {column} AS value, COUNT(*) AS freq
+FROM {schema}.{table}
+WHERE {column} IS NOT NULL
+GROUP BY {column}
+ORDER BY freq DESC
+FETCH FIRST 20 ROWS ONLY;""",
+)
+
+B3_SQLSERVER = Template(
+    key="B3",
+    query_id="B3",
+    variant="sqlserver",
+    heading="B3. Top-N frequent values (per column; gated — see note)",
+    provides=(TOP_VALUES,),
+    parameters=("schema", "table", "column"),
+    sql="""SELECT TOP 20 {column} AS value, COUNT(*) AS freq
+FROM {schema}.{table}
+WHERE {column} IS NOT NULL
+GROUP BY {column}
+ORDER BY freq DESC;""",
+)
+
+B3_TERADATA = Template(
+    key="B3",
+    query_id="B3",
+    variant="teradata",
+    heading="B3-TD. Top-N frequent values",
+    provides=(TOP_VALUES,),
+    parameters=("schema", "table", "column"),
+    sql="""SELECT TOP 20 {column} AS value, COUNT(*) AS freq
+FROM {schema}.{table}
+WHERE {column} IS NOT NULL
+GROUP BY {column}
+ORDER BY freq DESC;""",
+)
+
+B4_ANSI = Template(
+    key="B4",
+    query_id="B4",
+    variant="ansi",
+    heading="B4. Format classification sample (per column; adopted P14)",
+    provides=(FORMAT_SAMPLE,),
+    parameters=("schema", "table", "column"),
+    casts=True,
+    sql="""SELECT v, freq FROM (
+  SELECT UPPER(TRIM(CAST({column} AS varchar))) AS v, COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM(CAST({column} AS varchar)))
+) t ORDER BY MD5(v) FETCH FIRST 500 ROWS ONLY;""",
+)
+
+B4_SQLSERVER = Template(
+    key="B4",
+    query_id="B4",
+    variant="sqlserver",
+    heading="B4. Format classification sample (per column; adopted P14)",
+    provides=(FORMAT_SAMPLE,),
+    parameters=("schema", "table", "column"),
+    casts=True,
+    sql="""SELECT TOP 500 v, freq FROM (
+  SELECT UPPER(LTRIM(RTRIM(CAST({column} AS nvarchar(4000))))) AS v,
+         COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(LTRIM(RTRIM(CAST({column} AS nvarchar(4000)))))
+) t ORDER BY HASHBYTES('MD5', v);""",
+)
+
+B4_TERADATA = Template(
+    key="B4",
+    query_id="B4",
+    variant="teradata",
+    heading="B4-TD. Format classification sample",
+    provides=(FORMAT_SAMPLE,),
+    parameters=("schema", "table", "column"),
+    casts=True,
+    sql="""SELECT v, freq FROM (
+  SELECT UPPER(TRIM(CAST({column} AS VARCHAR(4000)))) AS v, COUNT(*) AS freq
+  FROM {schema}.{table}
+  WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM(CAST({column} AS VARCHAR(4000))))
+) t
+QUALIFY ROW_NUMBER() OVER (ORDER BY HASHROW(v)) <= 500;""",
+)
+
+C1_ANSI = Template(
+    key="C1",
+    query_id="C1",
+    variant="ansi",
+    heading="C1. Hashed distinct sample (deterministic bottom-k)",
+    provides=(VALUE_SAMPLE,),
+    parameters=("schema", "table", "column"),
+    sql="""SELECT v, raw, freq FROM (
+  SELECT UPPER(TRIM({column})) AS v, MIN({column}) AS raw, COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM({column}))
+) t ORDER BY MD5(v) FETCH FIRST 5000 ROWS ONLY;""",
+)
+
+C1_CAST_ANSI = Template(
+    key="C1-cast",
+    query_id="C1",
+    variant="ansi",
+    heading="C1. Hashed distinct sample (deterministic bottom-k)",
+    provides=(VALUE_SAMPLE,),
+    parameters=("schema", "table", "column"),
+    casts=True,
+    sql="""SELECT v, raw, freq FROM (
+  SELECT UPPER(TRIM(CAST({column} AS varchar))) AS v,
+         MIN(CAST({column} AS varchar)) AS raw, COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM(CAST({column} AS varchar)))
+) t ORDER BY MD5(v) FETCH FIRST 5000 ROWS ONLY;""",
+)
+
+C1_SQLSERVER = Template(
+    key="C1",
+    query_id="C1",
+    variant="sqlserver",
+    heading="C1. Hashed distinct sample (deterministic bottom-k)",
+    provides=(VALUE_SAMPLE,),
+    parameters=("schema", "table", "column"),
+    sql="""SELECT TOP 5000 v, raw, freq FROM (
+  SELECT UPPER(LTRIM(RTRIM({column}))) AS v, MIN({column}) AS raw,
+         COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(LTRIM(RTRIM({column})))
+) t ORDER BY HASHBYTES('MD5', v);""",
+)
+
+C1_CAST_SQLSERVER = Template(
+    key="C1-cast",
+    query_id="C1",
+    variant="sqlserver",
+    heading="C1. Hashed distinct sample (deterministic bottom-k)",
+    provides=(VALUE_SAMPLE,),
+    parameters=("schema", "table", "column"),
+    casts=True,
+    sql="""SELECT TOP 5000 v, raw, freq FROM (
+  SELECT UPPER(LTRIM(RTRIM(CAST({column} AS varchar(4000))))) AS v,
+         MIN(CAST({column} AS varchar(4000))) AS raw, COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(LTRIM(RTRIM(CAST({column} AS varchar(4000)))))
+) t ORDER BY HASHBYTES('MD5', v);""",
+)
+
+C1_TERADATA = Template(
+    key="C1",
+    query_id="C1",
+    variant="teradata",
+    heading="C1-TD. Hashed distinct sample",
+    provides=(VALUE_SAMPLE,),
+    parameters=("schema", "table", "column"),
+    sql="""SELECT v, raw, freq FROM (
+  SELECT UPPER(TRIM({column})) AS v, MIN({column}) AS raw, COUNT(*) AS freq
+  FROM {schema}.{table}
+  WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM({column}))
+) t
+QUALIFY ROW_NUMBER() OVER (ORDER BY HASHROW(v)) <= 5000;""",
+)
+
+C1_CAST_TERADATA = Template(
+    key="C1-cast",
+    query_id="C1",
+    variant="teradata",
+    heading="C1-TD. Hashed distinct sample",
+    provides=(VALUE_SAMPLE,),
+    parameters=("schema", "table", "column"),
+    casts=True,
+    sql="""SELECT v, raw, freq FROM (
+  SELECT UPPER(TRIM(CAST({column} AS VARCHAR(4000)))) AS v,
+         MIN(CAST({column} AS VARCHAR(4000))) AS raw, COUNT(*) AS freq
+  FROM {schema}.{table}
+  WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM(CAST({column} AS VARCHAR(4000))))
+) t
+QUALIFY ROW_NUMBER() OVER (ORDER BY HASHROW(v)) <= 5000;""",
+)
+
+#: engine -> template key -> template, mirroring :data:`STATEMENTS`.
+TEMPLATES: dict[str, dict[str, Template]] = {
+    "postgres": {
+        "B1": B1_ANSI,
+        "B2": B2_ANSI,
+        "B2-length": B2_LENGTH_ANSI,
+        "B3": B3_ANSI,
+        "B4": B4_ANSI,
+        "C1": C1_ANSI,
+        "C1-cast": C1_CAST_ANSI,
+    },
+    "sqlserver": {
+        "B1": B1_ANSI,
+        "B2": B2_ANSI,
+        "B2-length": B2_LENGTH_SQLSERVER,
+        "B3": B3_SQLSERVER,
+        "B4": B4_SQLSERVER,
+        "C1": C1_SQLSERVER,
+        "C1-cast": C1_CAST_SQLSERVER,
+    },
+    "teradata": {
+        "B1": B1_TERADATA,
+        "B2": B2_ANSI,
+        "B2-length": B2_LENGTH_TERADATA,
+        "B3": B3_TERADATA,
+        "B4": B4_TERADATA,
+        "C1": C1_TERADATA,
+        "C1-cast": C1_CAST_TERADATA,
+    },
+}
+
+
+def template(engine: str, key: str) -> Template | None:
+    """The Tier B/C block ``key`` on ``engine``, or None.
+
+    None means the catalog does not cover it for that engine — a gap to
+    record, never a licence to improvise one.
+    """
+    return TEMPLATES.get(engine, {}).get(key)
+
+
+def templates_for(engine: str) -> list[Template]:
+    """Every template ``engine`` runs, in the catalog's run order."""
+    by_key = TEMPLATES.get(engine, {})
+    return [by_key[key] for key in TIER_BC if key in by_key]
+
+
+def all_templates() -> list[Template]:
+    """Every distinct registered template, deduplicated."""
+    seen: list[Template] = []
+    for by_key in TEMPLATES.values():
+        for item in by_key.values():
+            if item not in seen:
+                seen.append(item)
+    return seen

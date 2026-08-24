@@ -15,7 +15,7 @@ SYSCAT/SYSIBM/SYSSTAT; Teradata DBC/Sys*; PostgreSQL
 pg_catalog/information_schema. Exclusions are recorded in index.md so
 scope is auditable.
 
-Run order per database: A1 → A2 → A3 → A4 → (per table) B1 → (per column) B2 → B3 → C1 → A5.
+Run order per database: A1 → A2 → A3 → A4 → (per table) B1 → (per column) B2 → B3 → B4 → C1 → A5.
 
 ---
 
@@ -337,7 +337,16 @@ FROM DBC.StatsV
 WHERE DatabaseName = '{schema}' AND TableName = '{table}';
 ```
 
-### B2-TD. Column profile — same as ANSI B2; use CHARACTER_LENGTH() for length stats.
+### B2-TD. Column profile
+
+The batched aggregate block is the ANSI one. Length stats use
+CHARACTER_LENGTH() (P11):
+```sql
+SELECT MIN(CHARACTER_LENGTH(c1)), MAX(CHARACTER_LENGTH(c1)), AVG(CHARACTER_LENGTH(c1)),
+       MIN(CHARACTER_LENGTH(c2)), MAX(CHARACTER_LENGTH(c2)), AVG(CHARACTER_LENGTH(c2))
+       /* ... chunked to stay within engine memory ... */
+FROM {schema}.{table};
+```
 
 ### B3-TD. Top-N frequent values
 ```sql
@@ -348,14 +357,46 @@ GROUP BY {column}
 ORDER BY freq DESC;
 ```
 
-### C1-TD. Hashed distinct sample
+### B4-TD. Format classification sample
 ```sql
-SELECT v FROM (
-  SELECT DISTINCT {column} AS v
+SELECT v, freq FROM (
+  SELECT UPPER(TRIM(CAST({column} AS VARCHAR(4000)))) AS v, COUNT(*) AS freq
   FROM {schema}.{table}
   WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM(CAST({column} AS VARCHAR(4000))))
 ) t
-QUALIFY ROW_NUMBER() OVER (ORDER BY v) <= 5000;
+QUALIFY ROW_NUMBER() OVER (ORDER BY HASHROW(v)) <= 500;
+```
+
+### C1-TD. Hashed distinct sample
+
+Corrected: this block ranked by `v` and skipped normalization, which is the
+arbitrary-slice sampling Tier C exists to forbid — ordering by the value
+keeps the alphabetically-lowest 5000, and two databases holding different
+parts of a value space then keep disjoint slices. Ranked by `HASHROW(v)` it
+keeps the same slice of the value universe as every other engine's block.
+
+Character columns:
+```sql
+SELECT v, raw, freq FROM (
+  SELECT UPPER(TRIM({column})) AS v, MIN({column}) AS raw, COUNT(*) AS freq
+  FROM {schema}.{table}
+  WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM({column}))
+) t
+QUALIFY ROW_NUMBER() OVER (ORDER BY HASHROW(v)) <= 5000;
+```
+
+Non-character columns:
+```sql
+SELECT v, raw, freq FROM (
+  SELECT UPPER(TRIM(CAST({column} AS VARCHAR(4000)))) AS v,
+         MIN(CAST({column} AS VARCHAR(4000))) AS raw, COUNT(*) AS freq
+  FROM {schema}.{table}
+  WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM(CAST({column} AS VARCHAR(4000))))
+) t
+QUALIFY ROW_NUMBER() OVER (ORDER BY HASHROW(v)) <= 5000;
 ```
 
 ---
@@ -363,6 +404,8 @@ QUALIFY ROW_NUMBER() OVER (ORDER BY v) <= 5000;
 ## Tier B — Per-table / per-column profiling (templates; identifiers allow-listed)
 
 ### B1. Row count (per table)
+
+ANSI / PostgreSQL / SQL Server (Teradata's identical block is B1-TD):
 ```sql
 SELECT COUNT(*) AS row_count FROM {schema}.{table};
 ```
@@ -373,7 +416,10 @@ DB2 `syscat.tables.card` (record stats-collection date alongside).
 ### B2. Column profile — BATCHED (one scan profiles many columns)
 
 Never issue one scan per column on large tables. Batch 10–20 columns per
-statement so a single pass computes all their aggregates:
+statement so a single pass computes all their aggregates.
+
+ANSI / PostgreSQL / SQL Server / Teradata (the aggregate names are ANSI and
+every supported engine spells them the same):
 ```sql
 SELECT COUNT(*),
        COUNT(c1), COUNT(DISTINCT c1), MIN(c1), MAX(c1),
@@ -405,6 +451,30 @@ FROM {schema}.{table} WHERE {column} IS NOT NULL;
 ```
 (`LEN()` on SQL Server.)
 
+Batched length form (P11) — the single-column form above costs one scan per
+column, which the batching rule three paragraphs up forbids. `LENGTH(NULL)`
+is NULL and MIN/MAX/AVG ignore NULLs, so the `IS NOT NULL` predicate the
+single-column form carries is redundant here; it could not be written per
+column in a batched statement anyway.
+
+ANSI / PostgreSQL / Teradata:
+```sql
+SELECT MIN(LENGTH(c1)), MAX(LENGTH(c1)), AVG(LENGTH(c1)),
+       MIN(LENGTH(c2)), MAX(LENGTH(c2)), AVG(LENGTH(c2))
+       /* ... chunked to stay within engine memory ... */
+FROM {schema}.{table};
+```
+
+SQL Server — `LEN()` rather than `LENGTH()`, and `AVG` over an integer
+argument does integer division on this engine, so the length is cast before
+averaging:
+```sql
+SELECT MIN(LEN(c1)), MAX(LEN(c1)), AVG(CAST(LEN(c1) AS float)),
+       MIN(LEN(c2)), MAX(LEN(c2)), AVG(CAST(LEN(c2) AS float))
+       /* ... chunked to stay within engine memory ... */
+FROM {schema}.{table};
+```
+
 ### B3. Top-N frequent values (per column; gated — see note)
 ```sql
 SELECT {column} AS value, COUNT(*) AS freq
@@ -414,12 +484,61 @@ GROUP BY {column}
 ORDER BY freq DESC
 FETCH FIRST 20 ROWS ONLY;
 ```
-(`LIMIT 20` MySQL/Postgres; `SELECT TOP 20` SQL Server.)
+(`LIMIT 20` MySQL/Postgres.)
+
+SQL Server (P10) — `FETCH FIRST ... ROWS ONLY` requires an `OFFSET` clause on
+this engine, so the row limit is `TOP`, as on Teradata:
+```sql
+SELECT TOP 20 {column} AS value, COUNT(*) AS freq
+FROM {schema}.{table}
+WHERE {column} IS NOT NULL
+GROUP BY {column}
+ORDER BY freq DESC;
+```
 Gate: run and store only when distinct_count from B2 is <= 30 (default; config).
 Top-N characterizes code-lists; long value lists characterize nothing.
 Purpose: characterizes code/status columns so the LLM annotator can describe them.
 Values from columns flagged sensitive in config are hashed before storage (see C1)
 or the column is excluded from B3 entirely.
+
+### B4. Format classification sample (per column; adopted P14)
+
+The OKF's `format:` line (`all-digits` / `alpha` / `mixed` / `email` /
+`phone-like`) is a plurality judgement over many values — a postal-code
+column whose min and max are `00-358` and `X1A 1N6` is still `all-digits`,
+because most of its values are. No other query supplies such a sample for
+columns that pass neither the top-N gate nor the fingerprint gate, so this
+one does: a deterministic bottom-500 distinct sample, always cast, read
+transiently. Classification happens in the crawler; the values are never
+persisted — only the category and, for temporal columns, length statistics
+derived from the re-rendered values (`freq` supplies the row weights).
+
+Adjudicated ruling (2026-08-24, P14): sensitive-listed columns ARE sampled by
+this query and classified — a persisted category ("phone-like") is not a
+value, and the fixture bundles carry formats on sensitive columns. Config
+`classify_sensitive_formats: false` withdraws even that for stricter
+regimes. B4 does not run where a C1 sample already exists for the column;
+the crawler classifies from that instead.
+
+ANSI/PostgreSQL:
+```sql
+SELECT v, freq FROM (
+  SELECT UPPER(TRIM(CAST({column} AS varchar))) AS v, COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM(CAST({column} AS varchar)))
+) t ORDER BY MD5(v) FETCH FIRST 500 ROWS ONLY;
+```
+
+SQL Server — `nvarchar`, not `varchar`: this block runs on character columns
+too, and a `varchar` cast would mangle the unicode it is trying to classify:
+```sql
+SELECT TOP 500 v, freq FROM (
+  SELECT UPPER(LTRIM(RTRIM(CAST({column} AS nvarchar(4000))))) AS v,
+         COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(LTRIM(RTRIM(CAST({column} AS nvarchar(4000)))))
+) t ORDER BY HASHBYTES('MD5', v);
+```
 
 ---
 
@@ -433,19 +552,73 @@ zero. Selection must be deterministic bottom-k: rank normalized values by an
 in-database hash and keep the k smallest, so every crawl independently keeps
 the SAME slice of the value universe. k default: 5000 (config).
 
-ANSI/PostgreSQL:
+ANSI/PostgreSQL, character columns:
 ```sql
-SELECT v FROM (
-  SELECT DISTINCT UPPER(TRIM({column})) AS v
+SELECT v, raw, freq FROM (
+  SELECT UPPER(TRIM({column})) AS v, MIN({column}) AS raw, COUNT(*) AS freq
   FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM({column}))
 ) t ORDER BY MD5(v) FETCH FIRST 5000 ROWS ONLY;
 ```
-Oracle: `ORDER BY ORA_HASH(v)` · SQL Server: `ORDER BY HASHBYTES('MD5', v)` ·
-DB2: `ORDER BY HASH_MD5(v)` · Teradata: `ORDER BY HASHROW(v)`.
+Oracle: `ORDER BY ORA_HASH(v)` · DB2: `ORDER BY HASH_MD5(v)`.
+SQL Server and Teradata have their own blocks below, because neither spells
+the row limit the ANSI way.
+
+`raw` (P13) is one un-normalized representative of each kept value, and it is
+what lets the crawler record which normalization rules actually applied to
+this column — the OKF and step 2 need the applied rules per column, and a
+statement that returns only `UPPER(TRIM(...))` has already destroyed the
+evidence. Grouping on the normalized value selects exactly the set `SELECT
+DISTINCT UPPER(TRIM(...))` selected, so the sampled slice is unchanged.
+
+`freq` (P15) is the group's row count. It exists for one consumer: length
+statistics on temporal columns are computed in the crawler over the
+re-rendered values (see *Temporal rendering* below), and an average length is
+row-weighted — 8.6 and 8.4 are different answers for the same eight rows. The
+count costs nothing in a scan that is already grouping, and it is never
+persisted.
+
+ANSI/PostgreSQL, non-character columns (P12) — cast to VARCHAR inside the
+derived table before normalization, per the rule below:
+```sql
+SELECT v, raw, freq FROM (
+  SELECT UPPER(TRIM(CAST({column} AS varchar))) AS v,
+         MIN(CAST({column} AS varchar)) AS raw, COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(TRIM(CAST({column} AS varchar)))
+) t ORDER BY MD5(v) FETCH FIRST 5000 ROWS ONLY;
+```
+
+SQL Server, character columns (P12) — `FETCH FIRST` needs an `OFFSET` on this
+engine, so the limit is `TOP`; `TRIM()` arrived in SQL Server 2017 and these
+are legacy systems, so the trim is spelled `LTRIM(RTRIM(...))`:
+```sql
+SELECT TOP 5000 v, raw, freq FROM (
+  SELECT UPPER(LTRIM(RTRIM({column}))) AS v, MIN({column}) AS raw,
+         COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(LTRIM(RTRIM({column})))
+) t ORDER BY HASHBYTES('MD5', v);
+```
+
+SQL Server, non-character columns (P12):
+```sql
+SELECT TOP 5000 v, raw, freq FROM (
+  SELECT UPPER(LTRIM(RTRIM(CAST({column} AS varchar(4000))))) AS v,
+         MIN(CAST({column} AS varchar(4000))) AS raw, COUNT(*) AS freq
+  FROM {schema}.{table} WHERE {column} IS NOT NULL
+  GROUP BY UPPER(LTRIM(RTRIM(CAST({column} AS varchar(4000)))))
+) t ORDER BY HASHBYTES('MD5', v);
+```
 
 The selection hash is UNKEYED and engine-native — acceptable because it only
 decides WHICH values are kept and is never stored. Numeric columns: cast to
 VARCHAR inside the derived table before normalization.
+
+A config `k` below 5000 is applied by the crawler to the rows this statement
+returns, not by editing the statement: the rows arrive in selection-hash
+order, so the first `k` of them are the bottom-k. A config `k` above 5000 is
+a configuration error — the catalog's literal is the ceiling.
 Pipeline post-processing (outside SQL, in the crawler):
 1. Normalize: strip leading zeros where all-digits (trim/uppercase already
    applied in-query for selection consistency). Record which rules applied.
@@ -460,6 +633,27 @@ Pipeline post-processing (outside SQL, in the crawler):
 Gate: run C1 only for columns where distinct_ratio > 0.5 or the column appears
 in any index/constraint from A3/A4. This is the cardinality gate that keeps
 status-code columns from becoming join candidates.
+
+### Temporal rendering (adopted P15 — pipeline post-processing, no SQL)
+
+A DATE or TIMESTAMP has no one string; every engine's CAST renders it
+differently (`2002-04-01 00:00:00` on PostgreSQL, `Apr  1 2002 12:00AM` on
+SQL Server), and step 2 compares hashes that came from different engines.
+Adjudicated ruling (2026-08-24, P15, fixture-validated digit-for-digit
+against `employee.hire_date`): the canonical rendering is
+
+- date part `YYYY/M/D` — slash-separated, no zero padding;
+- a nonzero time-of-day appends ` H:MM:SS` (hour unpadded, minutes and
+  seconds padded; fractional seconds dropped); midnight appends nothing;
+- a TIME-only value renders as `H:MM:SS`.
+
+The rendering is applied in the crawler, by parsing whatever string or native
+object the engine's CAST and driver produced — never by a per-engine
+formatting expression in SQL, which would quintuple the block count to say
+the same thing. Fingerprints, min/max, top-N and length statistics on
+temporal columns are all computed over the rendered form; length statistics
+are row-weighted via the sample's `freq` and only reported when the sample is
+complete (fewer rows returned than the block's cap).
 
 Step 2 computes Jaccard overlap between hash sets of column pairs across
 databases entirely from the OKFs. An edge records: both columns, the

@@ -1,11 +1,16 @@
 """``python -m crawler`` — run one Tier A crawl, write one JSON result.
 
     python -m crawler --config rig/config/chinook-postgres.json --out crawl.json
+    python -m crawler --config ... --measure --out crawl.json
 
 The summary goes to stderr and the JSON to stdout (or ``--out``), so the
 command pipes cleanly inside a job. ``--date`` pins the crawl date, which is
 what makes two runs of an unchanged database produce byte-identical output —
 the property the refresh diff depends on.
+
+Tier A alone is the default. ``--measure`` adds the Tier B/C pass, which is
+the half that reads data: it is opt-in because it costs table scans, and
+because a crawl that only wants the inventory should not pay for them.
 """
 
 from __future__ import annotations
@@ -43,6 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="crawl date to record, YYYY-MM-DD (default: today)",
     )
     parser.add_argument(
+        "--measure",
+        action="store_true",
+        help="also run the Tier B/C measuring pass (profiles, top-N, "
+        "fingerprints); costs table scans",
+    )
+    parser.add_argument(
         "--indent", type=int, default=2, help="JSON indent (0 for compact)"
     )
     return parser
@@ -54,7 +65,9 @@ def main(argv=None) -> int:
         config = CrawlConfig.load(args.config)
         connection = connect(config)
         try:
-            result = crawl(connection, config, today=args.date)
+            result = crawl(
+                connection, config, today=args.date, measure=args.measure
+            )
         finally:
             close = getattr(connection, "close", None)
             if callable(close):
@@ -70,13 +83,21 @@ def main(argv=None) -> int:
     else:
         print(text)
 
-    print(
+    summary = (
         f"{result.database} ({result.engine}): "
         f"{len(result.base_tables)} base tables, {len(result.columns)} columns, "
-        f"{len(result.constraints)} constraints, {len(result.indexes)} indexes, "
-        f"{result.completeness}",
-        file=sys.stderr,
+        f"{len(result.constraints)} constraints, {len(result.indexes)} indexes"
     )
+    if result.measured:
+        fingerprints = sum(
+            1 for p in result.column_profiles if p.fingerprint is not None
+        )
+        top_n = sum(1 for p in result.column_profiles if p.top_values)
+        summary += (
+            f", {len(result.column_profiles)} profiles, "
+            f"{top_n} top-N, {fingerprints} fingerprints"
+        )
+    print(f"{summary}, {result.completeness}", file=sys.stderr)
     for warning in result.warnings:
         print(f"  warning: {warning}", file=sys.stderr)
     # An INCOMPLETE or UNVERIFIED crawl still succeeded: the flag on the

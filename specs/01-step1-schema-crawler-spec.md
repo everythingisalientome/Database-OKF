@@ -40,6 +40,15 @@ No process context. No dynamic SQL. Deterministic crawl + LLM annotation pass.
    the flag makes the diagnosis visible in the table file).
 4. **B3** per column with distinct_count <= 30 (post-B2) and not sensitive-listed:
    top 20 values with frequencies.
+4b. **B4** per column without a C1 sample: deterministic bottom-500 distinct
+   sample, read transiently and classified in the crawler into the `format:`
+   vocabulary (all-digits / alpha / mixed / email / phone-like) by plurality;
+   the values are dropped and only the category persists. RULED (2026-08-24,
+   catalog P14): this includes sensitive-listed columns — a persisted
+   category is not a value, and the fixture bundles carry formats on their
+   sensitive columns — withdrawable per run via config
+   `classify_sensitive_formats: false`. Where C1 ran, its sample is
+   classified instead and B4 does not run.
 5. **C1** per column passing the fingerprint gate and not sensitive-listed:
    deterministic bottom-k distinct sample (k smallest engine-hash ranks of the
    normalized value — both sides of any future comparison keep the same slice
@@ -48,6 +57,16 @@ No process context. No dynamic SQL. Deterministic crawl + LLM annotation pass.
    same key for all crawls; 8-byte truncation) -> store hash set or minhash
    signature. The key never appears in any bundle; without it the fingerprint
    files are irreversible even for guessable value spaces.
+   RULED (2026-08-24, catalog P15): DATE/TIMESTAMP/TIME values are rendered
+   canonically in the crawler before any value work — `YYYY/M/D` unpadded,
+   ` H:MM:SS` appended only when the time-of-day is nonzero, `H:MM:SS` for
+   TIME — so fingerprints, bounds, top-N and length statistics agree across
+   engines (fixture-validated digit-for-digit against employee.hire_date).
+   Rendering is not a normalization rule and is not recorded as one; length
+   statistics over rendered values are row-weighted via the sample's group
+   row counts and reported only from a complete sample. A temporal value the
+   renderer cannot read withholds the whole fingerprint, with the reason
+   recorded — a partially rendered sample is no longer a bottom-k.
 6. **Annotation pass (LLM)** — descriptions are REQUIRED at three levels; they
    are step 3's semantic matching surface, not documentation:
    - **Database** (into index.md): 3–6 sentence summary of what the database

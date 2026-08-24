@@ -38,7 +38,7 @@ exclusively through bundles on disk.
 | `catalog/proposals/` | queries the catalog lacks, proposed for adoption, never run |
 | `src/` | `okf` (shared), `crawler`, `relbuilder`, `querybuilder` |
 | `tests/fixtures/okf/` | ground-truth bundles generated from Chinook (two simulated SORs + relationship bundle) |
-| `tests/fixtures/source/` | Chinook SQL + the fixture generator script (not yet in the repo) |
+| `tests/fixtures/source/` | Chinook 1.4.5 SQL + the fixture generator script — the fixtures' provenance |
 | `rig/` | docker-compose acceptance rig: PostgreSQL + SQL Server loaded with Chinook |
 | `BUILD-PLAN.md` | session roadmap, protocol, and status |
 | `CLAUDE.md` / `.github/copilot-instructions.md` | assistant instructions (same rules, two tools) |

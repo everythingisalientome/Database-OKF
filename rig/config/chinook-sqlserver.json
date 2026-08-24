@@ -2,6 +2,22 @@
   "database": "CHINOOK_MSSQL",
   "engine": "sqlserver",
   "expected_table_count": 11,
+  "measure": {
+    "fixture_mode": true,
+    "sensitive_columns": [
+      "customer.address",
+      "customer.postal_code",
+      "customer.phone",
+      "customer.fax",
+      "customer.email",
+      "employee.address",
+      "employee.postal_code",
+      "employee.phone",
+      "employee.fax",
+      "employee.email",
+      "employee.birth_date"
+    ]
+  },
   "connection": {
     "server": "localhost",
     "port": 14330,

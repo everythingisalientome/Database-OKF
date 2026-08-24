@@ -157,6 +157,30 @@ class Adapter(ABC):
     def parse_reconciliation(self, rows: Rows) -> tuple[int | None, list]:
         raise AdapterError(f"{self.engine}: A5 rows have no reader")
 
+    # -- Tier B/C: the measuring pass. Shared, see the note below. ---------
+
+    def template(self, key: str):
+        """The Tier B/C block for ``key`` on this engine, or None."""
+        return catalog.template(self.engine, key)
+
+    def parse_row_count(self, rows: Rows):
+        return read_row_count(rows)
+
+    def parse_column_aggregates(self, rows: Rows, columns):
+        return read_column_aggregates(rows, columns)
+
+    def parse_column_lengths(self, rows: Rows, columns):
+        return read_column_lengths(rows, columns)
+
+    def parse_top_values(self, rows: Rows):
+        return read_top_values(rows)
+
+    def parse_format_sample(self, rows: Rows):
+        return read_format_sample(rows)
+
+    def parse_value_sample(self, rows: Rows):
+        return read_value_sample(rows)
+
 
 def read_indexes(rows, *, is_included):
     """Read A4 rows beginning ``(schema, table, name, unique, column, ordinal)``.
@@ -240,3 +264,175 @@ def group_ordered(rows, key, position):
         positions = [position(r) for r in ordered]
         duplicates = len(positions) != len(set(positions))
         yield group_key, ordered, duplicates
+
+# -- Tier B / Tier C readers ------------------------------------------------
+#
+# These live on the base class rather than per engine because the catalog
+# blocks were written to line up: B1 returns one count, the batched B2 blocks
+# return COUNT(*) followed by a fixed number of values per column in the
+# column order the statement was built with, B3 returns (value, frequency),
+# and C1 returns (normalized, raw). An engine that could not answer in that
+# shape would need its own block, and would get its own reader with it.
+
+
+@dataclass(frozen=True)
+class Aggregates:
+    """B2's four numbers for one column, plus B2-length's three."""
+
+    non_null_count: int | None = None
+    distinct_count: int | None = None
+    min_value: Any = None
+    max_value: Any = None
+    min_length: int | None = None
+    max_length: int | None = None
+    avg_length: float | None = None
+
+    def with_lengths(self, min_length, max_length, avg_length) -> "Aggregates":
+        return Aggregates(
+            non_null_count=self.non_null_count,
+            distinct_count=self.distinct_count,
+            min_value=self.min_value,
+            max_value=self.max_value,
+            min_length=min_length,
+            max_length=max_length,
+            avg_length=avg_length,
+        )
+
+
+def read_row_count(rows) -> tuple[int | None, list[ParseWarning]]:
+    """B1: one row, one number."""
+    rows = list(rows)
+    if not rows or not rows[0]:
+        return None, [ParseWarning("B1 returned no row; row count unknown")]
+    return as_int(rows[0][0]), []
+
+
+def read_column_aggregates(rows, columns):
+    """The batched B2 block: ``(row_count, {column: Aggregates}, warnings)``.
+
+    The result is positional — ``COUNT(*)`` and then four values per column,
+    in the order the statement named them — so a row of the wrong width means
+    the statement and the column list have drifted apart. That is reported
+    and dropped rather than read off by guesswork, because reading it off by
+    guesswork would attribute one column's numbers to another.
+    """
+    columns = list(columns)
+    rows = list(rows)
+    expected = 1 + 4 * len(columns)
+    if not rows:
+        return None, {}, [ParseWarning("B2 returned no row; nothing profiled")]
+    row = list(rows[0])
+    if len(row) != expected:
+        return (
+            None,
+            {},
+            [
+                ParseWarning(
+                    f"B2 returned {len(row)} values for {len(columns)} "
+                    f"columns; expected {expected}. No profile is recorded "
+                    "for this batch rather than a misaligned one"
+                )
+            ],
+        )
+    row_count = as_int(row[0])
+    aggregates = {}
+    for index, column in enumerate(columns):
+        base = 1 + 4 * index
+        aggregates[column] = Aggregates(
+            non_null_count=as_int(row[base]),
+            distinct_count=as_int(row[base + 1]),
+            min_value=row[base + 2],
+            max_value=row[base + 3],
+        )
+    return row_count, aggregates, []
+
+
+def read_column_lengths(rows, columns):
+    """The batched B2-length block: ``({column: (min, max, avg)}, warnings)``."""
+    columns = list(columns)
+    rows = list(rows)
+    expected = 3 * len(columns)
+    if not rows:
+        return {}, [ParseWarning("B2-length returned no row; no length stats")]
+    row = list(rows[0])
+    if len(row) != expected:
+        return {}, [
+            ParseWarning(
+                f"B2-length returned {len(row)} values for {len(columns)} "
+                f"columns; expected {expected}. No length stats are recorded "
+                "for this batch rather than misaligned ones"
+            )
+        ]
+    lengths = {}
+    for index, column in enumerate(columns):
+        base = 3 * index
+        lengths[column] = (
+            as_int(row[base]),
+            as_int(row[base + 1]),
+            as_float(row[base + 2]),
+        )
+    return lengths, []
+
+
+def read_top_values(rows):
+    """B3: ``(value, frequency)`` pairs, in the order the engine returned them.
+
+    Not re-sorted. ``ORDER BY freq DESC`` has no tiebreaker in any of the B3
+    blocks, so equal-frequency values arrive in engine order; imposing an
+    order here would look canonical without being it.
+    """
+    pairs, warnings = [], []
+    for row in rows:
+        if len(row) < 2:
+            warnings.append(
+                ParseWarning(f"B3 returned a row of width {len(row)}; skipped")
+            )
+            continue
+        frequency = as_int(row[1])
+        if frequency is None:
+            warnings.append(
+                ParseWarning("B3 returned a row with no frequency; skipped")
+            )
+            continue
+        pairs.append((row[0], frequency))
+    return pairs, warnings
+
+
+def read_value_sample(rows):
+    """C1: ``(normalized, raw, freq)`` triples, in selection-hash order.
+
+    The order is load-bearing and must not be touched: the rows arrive ranked
+    by the engine's own hash of the normalized value, which is what makes the
+    first k of them a bottom-k rather than an arbitrary slice.
+    """
+    triples, warnings = [], []
+    for row in rows:
+        if not row:
+            continue
+        value = row[0]
+        raw = row[1] if len(row) > 1 else None
+        freq = as_int(row[2]) if len(row) > 2 else None
+        if value is None:
+            warnings.append(
+                ParseWarning("C1 returned a NULL normalized value; skipped")
+            )
+            continue
+        triples.append((value, raw, freq))
+    return triples, warnings
+
+
+def read_format_sample(rows):
+    """B4: ``(normalized, freq)`` pairs, in selection-hash order."""
+    pairs, warnings = [], []
+    for row in rows:
+        if not row:
+            continue
+        value = row[0]
+        freq = as_int(row[1]) if len(row) > 1 else None
+        if value is None:
+            warnings.append(
+                ParseWarning("B4 returned a NULL normalized value; skipped")
+            )
+            continue
+        pairs.append((value, freq))
+    return pairs, warnings

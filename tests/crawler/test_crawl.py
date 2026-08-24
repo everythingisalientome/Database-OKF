@@ -64,9 +64,10 @@ def test_the_audit_trail_records_the_sql_verbatim(result):
 
 
 def test_no_gaps_apply_now_every_proposal_is_adopted(result):
-    """P1-P9 are all in the catalog. An empty gap list is a claim — this
-    crawl is not quietly missing evidence — so it is asserted rather than
-    assumed."""
+    """P1-P13 are in the catalog and the P14/P15 rulings were adjudicated and
+    implemented, so the register is empty. An empty gap list is a claim —
+    this crawl is not quietly missing evidence — so it is asserted rather
+    than assumed."""
     assert result.gaps == []
 
 
