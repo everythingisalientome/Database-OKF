@@ -2,3 +2,5 @@
 __pycache__/
 .pytest_cache/
 .vscode/
+out/
+*.egg-info/

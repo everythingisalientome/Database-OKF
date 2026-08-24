@@ -20,6 +20,14 @@ No process context. No dynamic SQL. Deterministic crawl + LLM annotation pass.
    and dictionary column statistics (stats-first: B1/B2 scans run only where
    stats are missing or stale; profile lines record their source and date).
    Build the identifier allow-list from A1/A2 output.
+   Some dictionaries answer with an estimate rather than a count —
+   PostgreSQL's `pg_class.reltuples` is the planner's belief, not a
+   measurement — and row counts are load-bearing (rate denominators,
+   overlap confidence weight, junk-table filter, step 3 sequencing). Those
+   are recorded as `row_count_source: stats-estimate`, never as `stats`.
+   Distinct counts derived from histograms or samples are approximations
+   for the same reason: they are ample for gating, and B2 still runs where
+   one lands near a gate boundary.
 2. **B1** per table lacking fresh stats: row count.
    Tables with row_count = 0 or matching junk patterns (`_BKP`, `_TEST`,
    `_OLD`, `TMP_`) are cataloged but profiled minimally and flagged.
@@ -82,7 +90,7 @@ description_confirmed: false     # true when overlaid from process docs / human
 database: <dbname>
 engine: teradata
 row_count: 4812339
-row_count_source: stats        # stats | live
+row_count_source: stats        # stats | stats-estimate | live
 stats_date: 2026-08-19
 crawl_date: 2026-08-22
 flags: []                      # e.g. [junk-suspect], [pi:ACCT_ID]

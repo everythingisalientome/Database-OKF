@@ -1,0 +1,12 @@
+{
+  "database": "CHINOOK_MSSQL",
+  "engine": "sqlserver",
+  "expected_table_count": 11,
+  "connection": {
+    "server": "localhost",
+    "port": 14330,
+    "database": "chinook",
+    "user": "sa",
+    "password_env": "RIG_MSSQL_PASSWORD"
+  }
+}

@@ -5,6 +5,16 @@ filter set in pipeline config). Tier B/C queries are fixed templates whose `{tab
 and `{column}` parameters MUST be allow-listed against the Tier A crawl results
 before interpolation. No other SQL is ever issued.
 
+## Schema scope
+
+Default: crawl ALL schemas visible to the service account. Config
+`schema include/exclude` narrows when needed (archives, DEV/QA clone
+schemas). Adapters ALWAYS exclude engine system schemas, without config:
+Oracle SYS/SYSTEM/*AUX; SQL Server sys/INFORMATION_SCHEMA; DB2
+SYSCAT/SYSIBM/SYSSTAT; Teradata DBC/Sys*; PostgreSQL
+pg_catalog/information_schema. Exclusions are recorded in index.md so
+scope is auditable.
+
 Run order per database: A1 → A2 → A3 → A4 → (per table) B1 → (per column) B2 → B3 → C1 → A5.
 
 ---
@@ -60,18 +70,29 @@ FROM syscat.columns;
 
 ### A3. Declared constraints (PK / FK / unique — often absent in legacy, capture when present)
 
-ANSI:
+ANSI (schema-qualified joins; resolves FK target table AND column):
 ```sql
-SELECT tc.constraint_type, tc.table_schema, tc.table_name,
+SELECT tc.constraint_type, tc.table_schema, tc.table_name, tc.constraint_name,
        kcu.column_name, kcu.ordinal_position,
-       rc.unique_constraint_name AS referenced_constraint
+       rc.unique_constraint_schema, rc.unique_constraint_name,
+       ref_tc.table_schema AS referenced_schema,
+       ref_tc.table_name   AS referenced_table
 FROM information_schema.table_constraints tc
 JOIN information_schema.key_column_usage kcu
-  ON tc.constraint_name = kcu.constraint_name
- AND tc.table_schema = kcu.table_schema
+  ON  kcu.constraint_name   = tc.constraint_name
+  AND kcu.constraint_schema = tc.constraint_schema
 LEFT JOIN information_schema.referential_constraints rc
-  ON tc.constraint_name = rc.constraint_name;
+  ON  rc.constraint_name   = tc.constraint_name
+  AND rc.constraint_schema = tc.constraint_schema
+LEFT JOIN information_schema.table_constraints ref_tc
+  ON  ref_tc.constraint_name   = rc.unique_constraint_name
+  AND ref_tc.constraint_schema = rc.unique_constraint_schema;
 ```
+Referenced COLUMNS are resolved in code, not SQL: match
+(unique_constraint_schema, unique_constraint_name) against the PRIMARY
+KEY/UNIQUE rows of this same result set, pairing by ordinal_position.
+Rationale: position_in_unique_constraint is absent from SQL Server's
+information_schema, and this block is the one SQL Server runs.
 
 Oracle:
 ```sql
@@ -92,6 +113,34 @@ JOIN syscat.tabconst t
 ```
 
 ### A4. Indexes (join-intent signal where FKs are undeclared)
+
+PostgreSQL:
+```sql
+SELECT n.nspname AS table_schema, t.relname AS table_name,
+       i.relname AS index_name, ix.indisunique AS is_unique,
+       a.attname AS column_name, k.ordinality AS key_ordinal,
+       (k.ordinality > ix.indnkeyatts) AS is_included
+FROM pg_index ix
+JOIN pg_class i ON i.oid = ix.indexrelid
+JOIN pg_class t ON t.oid = ix.indrelid
+JOIN pg_namespace n ON n.oid = t.relnamespace
+JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ordinality) ON TRUE
+JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+WHERE t.relkind IN ('r', 'p')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema');
+```
+`indkey` holds an index's key columns and its INCLUDE columns in one
+vector; `indnkeyatts` is where the key columns stop. INCLUDE columns are
+payload — there to be fetched, explicitly not to be searched — so counting
+one as a key column manufactures join-intent evidence. The crawler keeps
+them apart (SQL Server marks the same distinction with key_ordinal = 0).
+Needs PostgreSQL 11+; earlier versions have neither indnkeyatts nor
+INCLUDE indexes, so drop the expression there.
+
+Documented omission: expression-index members (attnum = 0) are dropped by
+the pg_attribute join — an expression is not a join column. Composite
+index column order is preserved via ordinality (the join-intent signal
+depends on leading-column order).
 
 Oracle:
 ```sql
@@ -137,12 +186,66 @@ DB2 (already in A2's view — colcard = distinct, numnulls; -1 means never colle
 SELECT tabschema, tabname, colname, colcard, numnulls, stats_time
 FROM syscat.columns JOIN syscat.tables USING (tabschema, tabname);
 ```
-SQL Server (per-table row counts; column distincts via stats objects):
+SQL Server (per-table row counts; column distincts via stats objects).
+The DMV column is `row_count`; `rows` belongs to `sys.partitions`:
 ```sql
-SELECT s.name, t.name, p.rows FROM sys.tables t
+SELECT s.name AS table_schema, t.name AS table_name, p.row_count
+FROM sys.tables t
 JOIN sys.schemas s ON t.schema_id = s.schema_id
 JOIN sys.dm_db_partition_stats p ON t.object_id = p.object_id
 WHERE p.index_id IN (0,1);
+```
+PostgreSQL (n_distinct < 0 means -(distinct/rows) — multiply by row estimate):
+```sql
+SELECT n.nspname AS table_schema, c.relname AS table_name,
+       s.attname AS column_name, s.n_distinct, s.null_frac,
+       c.reltuples::bigint AS est_rows,
+       GREATEST(st.last_analyze, st.last_autoanalyze) AS stats_date
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+LEFT JOIN pg_stats s ON s.schemaname = n.nspname AND s.tablename = c.relname
+LEFT JOIN pg_stat_all_tables st ON st.relid = c.oid
+WHERE c.relkind IN ('r', 'p')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema');
+```
+Driven from pg_class, not pg_stats: pg_stats holds nothing at all for an
+empty table, so driving from it loses the row estimate for exactly the
+tables the junk filter looks for (row_count = 0). A table with no column
+statistics comes back with a NULL column_name and its estimate intact.
+
+Interpretation rules (crawler MUST apply): n_distinct >= 0 is a count;
+n_distinct < 0 is -(distinct/rows) and must be multiplied by est_rows;
+n_distinct = 0 means the planner has no estimate — unknown, not zero.
+null_frac is already a rate — store directly. reltuples is an ESTIMATE and
+recorded as such; reltuples = -1 means never analyzed, which is a
+missing-stats signal, not a row count.
+
+SQL Server — per-column approximate distincts from stats histograms
+(2016 SP1+; leading column of each stats object only). Recorded as
+APPROXIMATE; B2 still runs where the estimate lands near a gate boundary:
+```sql
+SELECT sch.name AS table_schema, t.name AS table_name, c.name AS column_name,
+       sp.rows, sp.rows_sampled, sp.last_updated,
+       SUM(CASE WHEN h.distinct_range_rows > 0 THEN h.distinct_range_rows ELSE 0 END)
+         + COUNT(h.step_number) AS approx_distinct
+FROM sys.stats st
+JOIN sys.stats_columns sc ON st.object_id = sc.object_id AND st.stats_id = sc.stats_id
+JOIN sys.columns c ON c.object_id = sc.object_id AND c.column_id = sc.column_id
+JOIN sys.tables t ON t.object_id = st.object_id
+JOIN sys.schemas sch ON sch.schema_id = t.schema_id
+CROSS APPLY sys.dm_db_stats_properties(st.object_id, st.stats_id) sp
+CROSS APPLY sys.dm_db_stats_histogram(st.object_id, st.stats_id) h
+WHERE sc.stats_column_id = 1
+GROUP BY sch.name, t.name, c.name, sp.rows, sp.rows_sampled, sp.last_updated;
+```
+
+Teradata (UNTESTED until the session-6 dry run). One row per collected
+statistic: a column with no stats is ABSENT, never zero-distinct. Rows with
+comma-separated ColumnName are multi-column stats — ignore for per-column:
+```sql
+SELECT DatabaseName, TableName, ColumnName, RowCount, UniqueValueCount,
+       NullCount, LastCollectTimeStamp
+FROM DBC.StatsV;
 ```
 Teradata: `DBC.StatsV` (RowCount, UniqueValueCount, LastCollectTimeStamp).
 
@@ -155,6 +258,13 @@ Oracle:
 SELECT (SELECT COUNT(*) FROM all_tables)  AS visible_tables,
        (SELECT COUNT(*) FROM dba_tables) AS total_tables FROM dual;
 -- if dba_tables is not granted, record visible_tables only and flag UNVERIFIED
+```
+
+Teradata (UNTESTED until session-6 dry run; base tables only, matching A1-TD):
+```sql
+SELECT COUNT(*) AS visible_tables
+FROM DBC.TablesV
+WHERE TableKind IN ('T', 'O');
 ```
 
 ANSI (visible count only; compare against DBA-provided expected count in config):
@@ -193,16 +303,21 @@ The crawler maps codes to canonical types before writing the OKF.)
 
 ### A3-TD. Constraints
 ```sql
-SELECT DatabaseName, TableName, IndexName, IndexType, ColumnName, ColumnPosition
+SELECT DatabaseName, TableName, IndexName, IndexNumber, IndexType,
+       ColumnName, ColumnPosition
 FROM DBC.IndicesV
 WHERE IndexType IN ('K', 'U');  -- K = primary key, U = unique — rare on legacy
 ```
 
 ### A4-TD. Indexes, including the Primary Index — read this one carefully
 ```sql
-SELECT DatabaseName, TableName, IndexName, IndexType, UniqueFlag,
+SELECT DatabaseName, TableName, IndexName, IndexNumber, IndexType, UniqueFlag,
        ColumnName, ColumnPosition
 FROM DBC.IndicesV;
+```
+(DatabaseName, TableName, IndexNumber) is the index identity — Teradata
+indexes are routinely unnamed, so IndexName is a label, not an identity.
+```sql
 ```
 IndexType 'P' (primary index) is Teradata's distribution key. It is chosen by the
 original designers for join and distribution performance, which makes it the

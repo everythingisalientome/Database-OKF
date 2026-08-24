@@ -35,19 +35,30 @@ exclusively through bundles on disk.
 |------|----------|
 | `specs/` | design specs 00–04 (source of truth; 00 lists locked decisions) |
 | `catalog/` | the complete SQL query catalog — the only SQL the crawler runs |
+| `catalog/proposals/` | queries the catalog lacks, proposed for adoption, never run |
 | `src/` | `okf` (shared), `crawler`, `relbuilder`, `querybuilder` |
 | `tests/fixtures/okf/` | ground-truth bundles generated from Chinook (two simulated SORs + relationship bundle) |
-| `tests/fixtures/source/` | Chinook SQL + the fixture generator script |
+| `tests/fixtures/source/` | Chinook SQL + the fixture generator script (not yet in the repo) |
+| `rig/` | docker-compose acceptance rig: PostgreSQL + SQL Server loaded with Chinook |
 | `BUILD-PLAN.md` | session roadmap, protocol, and status |
 | `CLAUDE.md` / `.github/copilot-instructions.md` | assistant instructions (same rules, two tools) |
 
 ## Quickstart
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -e .[dev]
-.venv/bin/python -m pytest            # full suite
-.venv/bin/python -m okf validate tests/fixtures/okf   # validate any bundle tree
+python -m venv .venv && .venv/bin/pip install -e ".[test]"
+.venv/bin/python -m pytest            # full suite; live-rig tests skip themselves
 ```
+
+Crawl one database (needs the driver extra for its engine — `postgres`,
+`sqlserver` or `teradata` — and a running database):
+
+```bash
+.venv/bin/python -m crawler --config rig/config/chinook-postgres.json --out out/chinook-pg.json
+```
+
+The acceptance rig and its one-command startup are documented in
+`rig/README.md`.
 
 Supported engines: Oracle, DB2 LUW, SQL Server, ANSI (PostgreSQL/MySQL),
 Teradata. Build status: see BUILD-PLAN.md.

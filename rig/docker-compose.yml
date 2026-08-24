@@ -1,0 +1,68 @@
+name: okf-crawler-rig
+
+# Two live databases for the crawler's acceptance tests, both loaded with the
+# Chinook schema. Ports are deliberately non-standard so the rig cannot
+# collide with a PostgreSQL or SQL Server already running on the host.
+#
+# Note on the SQL Server image: setting ACCEPT_EULA=Y accepts Microsoft's
+# licence terms for the container. Whoever runs `docker compose up` is the
+# one accepting them.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: chinook
+      POSTGRES_USER: crawler
+      POSTGRES_PASSWORD: crawler
+    ports:
+      - "55432:5432"
+    volumes:
+      - ./chinook/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crawler -d chinook"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Crawler!Rig2026"
+      MSSQL_PID: Developer
+    ports:
+      # 14330, not 1433 (avoids a local SQL Server) and not 51433: Windows
+      # reserves scattered ranges in the 49000-65000 band for WinNAT, and a
+      # bind inside one fails with "an attempt was made to access a socket in
+      # a way forbidden by its access permissions". Check with
+      # `netsh interface ipv4 show excludedportrange protocol=tcp`.
+      - "14330:1433"
+    volumes:
+      - ./chinook/sqlserver:/chinook:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" -b
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  # SQL Server has no /docker-entrypoint-initdb.d, so the schema load is a
+  # one-shot service that waits for health and then runs the script. It exits
+  # 0 when the load is done, which is what `--wait` watches for.
+  sqlserver-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    volumes:
+      - ./chinook/sqlserver:/chinook:ro
+    entrypoint:
+      - /bin/bash
+      - -c
+      - >-
+        /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P "Crawler!Rig2026"
+        -C -b -i /chinook/01-chinook-schema.sql
+    restart: "no"

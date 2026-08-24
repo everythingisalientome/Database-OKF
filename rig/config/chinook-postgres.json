@@ -1,0 +1,12 @@
+{
+  "database": "CHINOOK_PG",
+  "engine": "postgres",
+  "expected_table_count": 11,
+  "connection": {
+    "host": "localhost",
+    "port": 55432,
+    "dbname": "chinook",
+    "user": "crawler",
+    "password_env": "RIG_PG_PASSWORD"
+  }
+}

@@ -11,6 +11,11 @@ dependencies = []
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
+# Database drivers, one extra per engine: a PostgreSQL crawl running as an
+# OpenShift job should not need a Teradata driver installed to start.
+postgres = ["psycopg[binary]>=3.1"]
+sqlserver = ["pymssql>=2.3"]
+teradata = ["teradatasql>=17.20"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -18,3 +23,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "acceptance: needs the live rig (docker compose -f rig/docker-compose.yml up -d --wait)",
+]
