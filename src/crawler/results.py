@@ -499,8 +499,10 @@ class Fingerprint:
 
     @property
     def path(self) -> str:
-        """Bundle-relative payload path (specs/04, file mechanics)."""
-        return f"fingerprints/{self.table}.{self.column}.json"
+        """Bundle-relative payload path (specs/04, file mechanics). The
+        schema segment is required — multi-schema databases collide
+        without it (adjudicated before session 5)."""
+        return f"fingerprints/{self.schema}.{self.table}.{self.column}.json"
 
     @property
     def truncated(self) -> bool:

@@ -25,6 +25,7 @@ from .bundle import (
 )
 from .documents import (
     Document,
+    FingerprintRef,
     IndexDocument,
     RelationshipDocument,
     TableDocument,
@@ -41,6 +42,11 @@ RELATIONSHIP_REQUIRED = ("type", "tables", "built_from")
 INDEX_REQUIRED = ("type", "description", "build_date", "completeness")
 
 COMPLETENESS_VALUES = ("COMPLETE", "INCOMPLETE", "UNVERIFIED")
+
+#: The specs/04 fingerprint suppression vocabulary: why a gated column
+#: carries no payload. Anything else on a ``suppressed (...)`` line is an
+#: error — step 2 switches on these strings.
+SUPPRESSION_REASONS = ("sensitive", "budget", "unparseable-temporal")
 
 #: Conventions: "Keep one-liners under ~120 chars."
 ONE_LINER_LIMIT = 120
@@ -158,16 +164,49 @@ def validate_table(doc: TableDocument, *, bundle: DatabaseBundle | None = None) 
                    for l in column.lines):
             out.append(Issue("T010", f"column {column.name!r} has no [inferred]/"
                                      "[confirmed] description line", doc.path))
-        if column.is_sensitive:
-            if column.top_values is not None:
-                out.append(Issue("T011", f"sensitive-listed column {column.name!r} "
-                                         "carries top_values", doc.path))
-            if column.find("fingerprint") is not None:
-                out.append(Issue("T012", f"sensitive-listed column {column.name!r} "
-                                         "carries a fingerprint", doc.path))
+        if column.is_sensitive and column.top_values is not None:
+            out.append(Issue("T011", f"sensitive-listed column {column.name!r} "
+                                     "carries top_values", doc.path))
+        out.extend(_check_fingerprint_line(doc, column))
 
     if bundle is not None:
         out.extend(_validate_table_in_bundle(doc, bundle))
+    return out
+
+
+def _check_fingerprint_line(doc: TableDocument, column) -> list[Issue]:
+    """One column's ``fingerprint:`` line, in any of its three legal states:
+    absent, a payload reference, or the specs/04 suppression form."""
+    out: list[Issue] = []
+    value = column.value("fingerprint")
+    if value is None:
+        return out
+
+    reason = column.fingerprint_suppression
+    if reason is not None:
+        if reason not in SUPPRESSION_REASONS:
+            out.append(Issue("T020", f"column {column.name!r} suppression reason "
+                                     f"{reason!r} is not one of "
+                                     f"{'|'.join(SUPPRESSION_REASONS)}", doc.path))
+        return out
+
+    try:
+        ref = FingerprintRef.parse(value)
+    except ParseError:
+        out.append(Issue("T021", f"column {column.name!r} fingerprint line is "
+                                 "neither a reference nor 'suppressed (<reason>)': "
+                                 f"{value!r}", doc.path))
+        return out
+
+    if column.is_sensitive:
+        out.append(Issue("T012", f"sensitive-listed column {column.name!r} "
+                                 "carries a fingerprint", doc.path))
+    if doc.schema and doc.table:
+        expected = f"fingerprints/{doc.schema}.{doc.table}.{column.name}.json"
+        if ref.path != expected:
+            out.append(Issue("T019", f"column {column.name!r} payload path must "
+                                     f"be {expected!r} (schema segment required), "
+                                     f"got {ref.path!r}", doc.path))
     return out
 
 
@@ -183,7 +222,13 @@ def _validate_table_in_bundle(doc: TableDocument, bundle: DatabaseBundle) -> lis
             out.append(Issue("T014", f"path is {actual!r} but name {doc.name!r} "
                                      f"implies {expected!r}", doc.path))
 
-    for column, ref in doc.fingerprint_refs:
+    for column in doc.columns:
+        try:
+            ref = column.fingerprint
+        except ParseError:
+            continue  # already reported as T021 by the document rules
+        if ref is None:
+            continue
         target = bundle.resolve(ref)
         if not target.is_file():
             out.append(Issue("T015", f"column {column.name!r} references a missing "

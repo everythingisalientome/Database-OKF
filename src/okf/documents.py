@@ -26,6 +26,7 @@ _KEYED_RE = re.compile(r"^(?P<key>[A-Za-z][A-Za-z0-9_-]*): (?P<value>.*)$")
 _COMMENT_RE = re.compile(r"^(?P<value>.*?)(?P<comment>\s{2,}#.*)$")
 _EDGE_RE = re.compile(r"^(?P<left>\S+) <-> (?P<right>\S+)$")
 _FINGERPRINT_RE = re.compile(r"^(?P<algo>\S+) @ (?P<path>\S+)$")
+_SUPPRESSED_RE = re.compile(r"^suppressed \((?P<reason>[a-z-]+)\)$")
 _BUILT_FROM_RE = re.compile(r"^(?P<bundle>.+)@(?P<date>\d{4}-\d{2}-\d{2})$")
 
 
@@ -164,8 +165,23 @@ class Column(_LineBag):
 
     @property
     def fingerprint(self) -> FingerprintRef | None:
+        """The payload reference, or None where there is no ``fingerprint:``
+        line — or where the line is the specs/04 suppression form, which
+        explains an absence rather than referencing a payload."""
         value = self.value("fingerprint")
-        return FingerprintRef.parse(value) if value else None
+        if not value or _SUPPRESSED_RE.match(value.strip()):
+            return None
+        return FingerprintRef.parse(value)
+
+    @property
+    def fingerprint_suppression(self) -> str | None:
+        """The suppression reason from ``fingerprint: suppressed (<reason>)``,
+        or None when the line is absent or is a payload reference."""
+        value = self.value("fingerprint")
+        if not value:
+            return None
+        match = _SUPPRESSED_RE.match(value.strip())
+        return match.group("reason") if match else None
 
     @property
     def normalization(self) -> list[str]:
@@ -333,9 +349,15 @@ class TableDocument(Document, _LineBag):
 
     @property
     def fingerprint_refs(self) -> list[tuple[Column, FingerprintRef]]:
+        """Every column's payload reference that parses. Lenient on purpose
+        (consumers tolerate broken links, per OKF); the validator is where a
+        malformed line becomes an error, via :attr:`Column.fingerprint`."""
         out = []
         for col in self.columns:
-            ref = col.fingerprint
+            try:
+                ref = col.fingerprint
+            except ParseError:
+                continue
             if ref is not None:
                 out.append((col, ref))
         return out

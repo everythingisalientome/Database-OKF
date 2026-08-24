@@ -57,6 +57,27 @@ Crawl one database (needs the driver extra for its engine — `postgres`,
 .venv/bin/python -m crawler --config rig/config/chinook-postgres.json --out out/chinook-pg.json
 ```
 
+`--measure` adds the profiling pass (top-N, fingerprints); `--emit okf`
+runs the annotation pass, writes the OKF bundle under `okf/db/<database>`,
+and validates it. Emission also works offline from a saved crawl result:
+
+```bash
+.venv/bin/python -m crawler --config rig/config/chinook-postgres.json --measure --out out/chinook-pg.json
+.venv/bin/python -m crawler --from-crawl out/chinook-pg.json --emit okf
+```
+
+By default no model is attached (`--annotator none`): every description is
+emitted as the explicit unknown (`[inferred:low] insufficient evidence to
+describe`, HITL-queued). `--annotator llm` calls any OpenAI-compatible
+endpoint — install the extra (`pip install -e ".[llm]"`) and set
+`CRAWLER_LLM_MODEL`, `CRAWLER_LLM_API_KEY` (always from the environment,
+never a config value; use a dummy for keyless endpoints), and optionally
+`CRAWLER_LLM_BASE_URL` for a non-vendor endpoint such as a cluster-local
+vLLM or Ollama. Any other transport wires its own `complete(prompt) -> text`
+callable through `crawler.annotate.LLMAnnotator`. Whatever the model
+returns is sanitized in code; anything unusable becomes the explicit
+unknown, never a missing description.
+
 The acceptance rig and its one-command startup are documented in
 `rig/README.md`.
 

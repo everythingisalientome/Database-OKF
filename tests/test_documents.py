@@ -127,6 +127,31 @@ def test_fingerprint_reference_parsing():
     assert ref.render() == "sha256-set @ fingerprints/track.track_id.json"
 
 
+def test_a_suppressed_fingerprint_line_is_not_a_reference():
+    """The specs/04 suppression form explains an absence: no ref to resolve,
+    the reason readable on its own accessor."""
+    doc = parse_document(TABLE)
+    column = doc.column("track_id")
+    column.find("fingerprint").text = "fingerprint: suppressed (budget)"
+    assert column.fingerprint is None
+    assert column.fingerprint_suppression == "budget"
+    assert doc.fingerprint_refs == []
+
+
+def test_a_reference_line_has_no_suppression_reason():
+    doc = parse_document(TABLE)
+    assert doc.column("track_id").fingerprint_suppression is None
+
+
+def test_a_malformed_fingerprint_line_is_skipped_by_the_lenient_aggregate():
+    doc = parse_document(TABLE)
+    column = doc.column("track_id")
+    column.find("fingerprint").text = "fingerprint: yes"
+    with pytest.raises(ParseError):
+        column.fingerprint  # the strict accessor still refuses it
+    assert doc.fingerprint_refs == []  # the consumer-facing walk survives
+
+
 def test_normalization_none_is_the_empty_rule_list():
     doc = parse_document(TABLE)
     assert doc.column("track_id").normalization == []

@@ -53,6 +53,7 @@ from .frontmatter import Field, FrontMatter
 from .parse import parse_document, read_document, render_document, write_document
 from .provenance import Provenance
 from .validate import (
+    SUPPRESSION_REASONS,
     Issue,
     errors,
     validate_bundle,
@@ -76,6 +77,7 @@ __all__ = [
     "Field", "FrontMatter",
     "parse_document", "read_document", "render_document", "write_document",
     "Provenance",
+    "SUPPRESSION_REASONS",
     "Issue", "errors", "validate_bundle", "validate_document", "validate_index",
     "validate_relationship", "validate_root", "validate_table",
     "__version__",

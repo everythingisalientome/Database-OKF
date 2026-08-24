@@ -222,6 +222,53 @@ def test_dangling_fingerprint_reference_is_an_error(db):
     assert "T015" in codes(validate_bundle(db))
 
 
+def test_a_suppression_line_on_a_sensitive_column_is_legal(root):
+    """specs/04 suppression vocabulary: `fingerprint: suppressed (sensitive)`
+    explains an absence — it is not a fingerprint, and must not trip T012."""
+    sales = root.database("MUSICSTORE_SALES")
+    column = sales.table("customer").column("email")
+    column.lines.append(
+        ContentLine(Provenance("observed"), "fingerprint: suppressed (sensitive)")
+    )
+    found = codes(validate_bundle(sales))
+    assert "T012" not in found
+    assert "T020" not in found
+    assert column.fingerprint is None
+    assert column.fingerprint_suppression == "sensitive"
+
+
+def test_an_out_of_vocabulary_suppression_reason_is_an_error(db):
+    column = db.table("track").column("composer")
+    column.lines.append(
+        ContentLine(Provenance("observed"), "fingerprint: suppressed (laziness)")
+    )
+    assert "T020" in codes(validate_bundle(db))
+
+
+def test_a_fingerprint_line_that_is_neither_form_is_an_error(db):
+    column = db.table("track").column("track_id")
+    column.find("fingerprint").text = "fingerprint: yes"
+    assert "T021" in codes(validate_bundle(db))
+
+
+def test_a_payload_path_without_the_schema_segment_is_an_error(db):
+    """Adjudicated before session 5: fingerprints/<schema>.<table>.<column>.json,
+    schema segment required — multi-schema databases collide without it."""
+    column = db.table("track").column("track_id")
+    column.find("fingerprint").text = (
+        "fingerprint: sha256/8B @ fingerprints/track.track_id.json"
+    )
+    assert "T019" in codes(validate_bundle(db))
+
+
+def test_a_payload_path_for_someone_elses_column_is_an_error(db):
+    column = db.table("track").column("track_id")
+    column.find("fingerprint").text = (
+        "fingerprint: sha256/8B @ fingerprints/CORE.track.name.json"
+    )
+    assert "T019" in codes(validate_bundle(db))
+
+
 def test_normalization_disagreement_is_an_error(db):
     column = db.table("track").column("name")
     column.find("normalization").text = "normalization: [trim]"

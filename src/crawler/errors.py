@@ -23,6 +23,16 @@ class AdapterError(CrawlerError):
     """No adapter exists for the requested engine, or it was misused."""
 
 
+class AnnotationError(CrawlerError):
+    """An annotator's response could not be used.
+
+    Raised by annotator implementations (malformed JSON, not an object) and
+    caught by the annotation pass, which substitutes the explicit unknown and
+    records a warning — a model that cannot answer is treated exactly like no
+    model at all, never as a reason to leave a description out.
+    """
+
+
 class QueryError(CrawlerError):
     """A catalog statement failed against the live database."""
 

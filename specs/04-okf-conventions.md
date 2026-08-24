@@ -72,13 +72,21 @@ Consumers read index.md first and load child files lazily.
 ## File mechanics
 
 - Every file ends with exactly one final newline.
-- Fingerprint references are bundle-relative (`fingerprints/<table>.<column>.json`),
-  never absolute. The markdown line's algo string and the payload's `algo`
+- Fingerprint references are bundle-relative
+  (`fingerprints/<schema>.<table>.<column>.json` — schema segment required;
+  multi-schema databases collide without it), never absolute. The markdown line's algo string and the payload's `algo`
   field are the same vocabulary: `hmac-sha256/8B` (prod) / `sha256/8B`
   (unkeyed fixtures).
 - index.md child-index lines (layer 2) are mechanically extracted and carry
   no provenance tag — they are structural, not claims. Relationship files
   have no frontmatter `description`; pair-index one-liners are computed.
+
+## Fingerprint suppression vocabulary
+
+A gated column that could have had a fingerprint but doesn't MUST say why,
+so step 2 reads absence of measurement, not absence of evidence:
+`- [observed] fingerprint: suppressed (<sensitive|budget|unparseable-temporal>)`
+Ineligible columns (failed the cardinality/index gate) carry no line at all.
 
 ## Data-in-OKF rules
 

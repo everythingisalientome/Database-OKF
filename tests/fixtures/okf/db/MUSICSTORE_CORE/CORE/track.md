@@ -21,7 +21,7 @@ flags: []
 - [observed] format: all-digits; range: [1 .. 3503]
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] constraint: PRIMARY KEY
-- [observed] fingerprint: sha256-set @ fingerprints/track.track_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.track.track_id.json
 - [observed] normalization: [none]
 - [inferred:high] Unique identifier; candidate key of track.
 
@@ -30,7 +30,7 @@ flags: []
 - [observed] distinct_count: 3257; distinct_ratio: 0.9298; null_rate: 0.0
 - [observed] length: min 2, max 123, avg 15.9
 - [observed] format: alpha; range: ['"40"' .. 'Último Pau-De-Arara']
-- [observed] fingerprint: sha256-set @ fingerprints/track.name.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.track.name.json
 - [observed] normalization: [uppercase]
 - [inferred:high] Display name of the track record.
 
@@ -41,7 +41,7 @@ flags: []
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] constraint: FOREIGN KEY -> CORE.album.album_id
 - [observed] index: non-unique
-- [observed] fingerprint: sha256-set @ fingerprints/track.album_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.track.album_id.json
 - [observed] normalization: [none]
 - [inferred:medium] Reference identifier (album).
 
@@ -53,7 +53,7 @@ flags: []
 - [observed] constraint: FOREIGN KEY -> CORE.media_type.media_type_id
 - [observed] index: non-unique
 - [observed] top_values: 1(87%), 2(7%), 3(6%), 5(0%), 4(0%)
-- [observed] fingerprint: sha256-set @ fingerprints/track.media_type_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.track.media_type_id.json
 - [observed] normalization: [none]
 - [inferred:medium] Reference identifier (media_type).
 
@@ -65,7 +65,7 @@ flags: []
 - [observed] constraint: FOREIGN KEY -> CORE.genre.genre_id
 - [observed] index: non-unique
 - [observed] top_values: 1(37%), 7(17%), 3(11%), 4(9%), 2(4%), 19(3%)
-- [observed] fingerprint: sha256-set @ fingerprints/track.genre_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.track.genre_id.json
 - [observed] normalization: [none]
 - [inferred:medium] Reference identifier (genre).
 
@@ -80,7 +80,7 @@ flags: []
 - [observed] type: INT, not null
 - [observed] distinct_count: 3080; distinct_ratio: 0.8792; null_rate: 0.0
 - [observed] format: all-digits; range: [1071 .. 5286953]
-- [observed] fingerprint: sha256-set @ fingerprints/track.milliseconds.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.track.milliseconds.json
 - [observed] normalization: [none]
 - [inferred:high] Track duration in milliseconds.
 
@@ -88,7 +88,7 @@ flags: []
 - [observed] type: INT, nullable
 - [observed] distinct_count: 3501; distinct_ratio: 0.9994; null_rate: 0.0
 - [observed] format: all-digits; range: [38747 .. 1059546140]
-- [observed] fingerprint: sha256-set @ fingerprints/track.bytes.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.track.bytes.json
 - [observed] normalization: [none]
 - [inferred:medium] Media file size in bytes.
 

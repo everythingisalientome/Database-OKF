@@ -262,10 +262,11 @@ def test_the_reconstructible_fingerprints_are_reproduced(fingerprint_case):
 
 
 def test_every_fixture_fingerprint_is_unkeyed_and_says_so(db_bundles):
-    """The fixtures are public and reproducible; a prod bundle is neither."""
+    """The fixtures are public and reproducible; a prod bundle is neither.
+    Markdown line and payload speak the same algo vocabulary (specs/04)."""
     for bundle in db_bundles:
         for _table, _column, ref in bundle.fingerprint_refs():
-            assert ref.algo == "sha256-set"
+            assert ref.algo == "sha256/8B"
             assert bundle.fingerprint(ref).algo == "sha256/8B"
 
 

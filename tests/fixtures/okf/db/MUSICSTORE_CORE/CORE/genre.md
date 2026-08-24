@@ -22,7 +22,7 @@ flags: []
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] constraint: PRIMARY KEY
 - [observed] top_values: 1(4%), 2(4%), 3(4%), 4(4%), 5(4%), 6(4%)
-- [observed] fingerprint: sha256-set @ fingerprints/genre.genre_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.genre.genre_id.json
 - [observed] normalization: [none]
 - [inferred:high] Unique identifier; candidate key of genre.
 
@@ -32,6 +32,6 @@ flags: []
 - [observed] length: min 3, max 18, avg 9.0
 - [observed] format: alpha; range: ['Alternative' .. 'World']
 - [observed] top_values: Rock(4%), Jazz(4%), Metal(4%), Alternative & Punk(4%), Rock And Roll(4%), Blues(4%)
-- [observed] fingerprint: sha256-set @ fingerprints/genre.name.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.genre.name.json
 - [observed] normalization: [uppercase]
 - [inferred:high] Display name of the genre record.

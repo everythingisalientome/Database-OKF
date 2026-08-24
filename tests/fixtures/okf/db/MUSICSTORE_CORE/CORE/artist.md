@@ -21,7 +21,7 @@ flags: []
 - [observed] format: all-digits; range: [1 .. 275]
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] constraint: PRIMARY KEY
-- [observed] fingerprint: sha256-set @ fingerprints/artist.artist_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.artist.artist_id.json
 - [observed] normalization: [none]
 - [inferred:high] Unique identifier; candidate key of artist.
 
@@ -30,6 +30,6 @@ flags: []
 - [observed] distinct_count: 275; distinct_ratio: 1.0; null_rate: 0.0
 - [observed] length: min 2, max 85, avg 20.6
 - [observed] format: alpha; range: ['A Cor Do Som' .. 'Zeca Pagodinho']
-- [observed] fingerprint: sha256-set @ fingerprints/artist.name.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.artist.name.json
 - [observed] normalization: [uppercase]
 - [inferred:high] Display name of the artist record.

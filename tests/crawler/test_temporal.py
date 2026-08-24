@@ -117,7 +117,7 @@ def test_the_fixture_payload_is_reproduced_from_native_datetimes(fixture_root):
     expected = json.loads(
         (
             fixture_root
-            / "db/MUSICSTORE_SALES/fingerprints/employee.hire_date.json"
+            / "db/MUSICSTORE_SALES/fingerprints/SALES.employee.hire_date.json"
         ).read_text(encoding="utf-8")
     )
     assert list(normalized.rules) == expected["normalization"] == []

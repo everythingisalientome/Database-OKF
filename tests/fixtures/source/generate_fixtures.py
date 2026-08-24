@@ -220,6 +220,8 @@ for dbname, cfg in BUNDLES.items():
             if is_pi: fm.append('- [observed] index: PRIMARY INDEX (Teradata PI)')
             if sens:
                 fm.append('- [observed] sensitive-listed: top-N and fingerprint suppressed')
+                # specs/04 suppression vocabulary: absence of measurement, said out loud
+                fm.append('- [observed] fingerprint: suppressed (sensitive)')
             else:
                 if 'top' in p and p['distinct_count'] <= 30:
                     tv = ', '.join(f'{v}({round(100*f/p["non_null"])}%)' for v, f in p['top'][:6])
@@ -228,11 +230,13 @@ for dbname, cfg in BUNDLES.items():
                 if eligible and p['distinct_count'] > 0:
                     hashes, rules = fingerprint(distinct)
                     fingerprints[(dbname, t, c)] = set(hashes)
-                    fp_path = f'fingerprints/{t}.{c}.json'
+                    # schema segment required (specs/04): multi-schema databases
+                    # collide without it
+                    fp_path = f'fingerprints/{schema}.{t}.{c}.json'
                     json.dump({'algo': 'sha256/8B', 'normalization': rules,
                                'sample_cap': FP_SAMPLE, 'count': len(hashes),
                                'hashes': hashes}, open(f'{dbdir}/{fp_path}', 'w'))
-                    fm.append(f'- [observed] fingerprint: sha256-set @ {fp_path}')
+                    fm.append(f'- [observed] fingerprint: sha256/8B @ {fp_path}')
                     fm.append(f'- [observed] normalization: [{", ".join(rules) if rules else "none"}]')
             d, dc = col_desc(t, c, p)
             fm.append(f'- [inferred:{dc}] {d}')

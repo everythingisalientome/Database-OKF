@@ -22,7 +22,7 @@ flags: [pi:employee_id]
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] index: PRIMARY INDEX (Teradata PI)
 - [observed] top_values: 1(12%), 2(12%), 3(12%), 4(12%), 5(12%), 6(12%)
-- [observed] fingerprint: sha256-set @ fingerprints/employee.employee_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.employee.employee_id.json
 - [observed] normalization: [none]
 - [inferred:high] Unique identifier; candidate key of employee.
 
@@ -32,7 +32,7 @@ flags: [pi:employee_id]
 - [observed] length: min 4, max 8, avg 6.2
 - [observed] format: alpha; range: ['Adams' .. 'Peacock']
 - [observed] top_values: Adams(12%), Edwards(12%), Peacock(12%), Park(12%), Johnson(12%), Mitchell(12%)
-- [observed] fingerprint: sha256-set @ fingerprints/employee.last_name.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.employee.last_name.json
 - [observed] normalization: [uppercase]
 - [inferred:medium] Low-cardinality attribute; 8 distinct values.
 
@@ -42,7 +42,7 @@ flags: [pi:employee_id]
 - [observed] length: min 4, max 8, avg 5.8
 - [observed] format: alpha; range: ['Andrew' .. 'Steve']
 - [observed] top_values: Andrew(12%), Nancy(12%), Jane(12%), Margaret(12%), Steve(12%), Michael(12%)
-- [observed] fingerprint: sha256-set @ fingerprints/employee.first_name.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.employee.first_name.json
 - [observed] normalization: [uppercase]
 - [inferred:medium] Low-cardinality attribute; 8 distinct values.
 
@@ -52,7 +52,7 @@ flags: [pi:employee_id]
 - [observed] length: min 8, max 19, avg 13.9
 - [observed] format: alpha; range: ['General Manager' .. 'Sales Support Agent']
 - [observed] top_values: Sales Support Agent(38%), IT Staff(25%), General Manager(12%), Sales Manager(12%), IT Manager(12%)
-- [observed] fingerprint: sha256-set @ fingerprints/employee.title.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.employee.title.json
 - [observed] normalization: [uppercase]
 - [inferred:high] Display name of the employee record.
 
@@ -62,7 +62,7 @@ flags: [pi:employee_id]
 - [observed] format: all-digits; range: [1 .. 6]
 - [observed] index: non-unique
 - [observed] top_values: 2(43%), 1(29%), 6(29%)
-- [observed] fingerprint: sha256-set @ fingerprints/employee.reports_to.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.employee.reports_to.json
 - [observed] normalization: [none]
 - [inferred:high] Manager employee_id (self-reference); null for top of hierarchy.
 
@@ -80,7 +80,7 @@ flags: [pi:employee_id]
 - [observed] length: min 8, max 10, avg 8.6
 - [observed] format: mixed; range: ['2002/4/1' .. '2004/3/4']
 - [observed] top_values: 2003/10/17(25%), 2002/8/14(12%), 2002/5/1(12%), 2002/4/1(12%), 2003/5/3(12%), 2004/1/2(12%)
-- [observed] fingerprint: sha256-set @ fingerprints/employee.hire_date.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.employee.hire_date.json
 - [observed] normalization: [none]
 - [inferred:high] Date attribute; ISO datetime format observed.
 

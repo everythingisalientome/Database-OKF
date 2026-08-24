@@ -20,7 +20,7 @@ flags: [pi:invoice_id]
 - [observed] distinct_count: 2240; distinct_ratio: 1.0; null_rate: 0.0
 - [observed] format: all-digits; range: [1 .. 2240]
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
-- [observed] fingerprint: sha256-set @ fingerprints/invoice_line.invoice_line_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.invoice_line.invoice_line_id.json
 - [observed] normalization: [none]
 - [inferred:high] Unique identifier; candidate key of invoice_line.
 
@@ -31,7 +31,7 @@ flags: [pi:invoice_id]
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] index: non-unique
 - [observed] index: PRIMARY INDEX (Teradata PI)
-- [observed] fingerprint: sha256-set @ fingerprints/invoice_line.invoice_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.invoice_line.invoice_id.json
 - [observed] normalization: [none]
 - [inferred:medium] Reference identifier (invoice).
 
@@ -40,7 +40,7 @@ flags: [pi:invoice_id]
 - [observed] distinct_count: 1984; distinct_ratio: 0.8857; null_rate: 0.0
 - [observed] format: all-digits; range: [1 .. 3500]
 - [observed] index: non-unique
-- [observed] fingerprint: sha256-set @ fingerprints/invoice_line.track_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.invoice_line.track_id.json
 - [observed] normalization: [none]
 - [inferred:medium] Track sold on this line. Values match CORE track catalog identifiers.
 

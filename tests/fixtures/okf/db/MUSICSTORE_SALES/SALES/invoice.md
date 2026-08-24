@@ -21,7 +21,7 @@ flags: [pi:invoice_id]
 - [observed] format: all-digits; range: [1 .. 412]
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] index: PRIMARY INDEX (Teradata PI)
-- [observed] fingerprint: sha256-set @ fingerprints/invoice.invoice_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.invoice.invoice_id.json
 - [observed] normalization: [none]
 - [inferred:high] Unique identifier; candidate key of invoice.
 
@@ -31,7 +31,7 @@ flags: [pi:invoice_id]
 - [observed] format: all-digits; range: [1 .. 59]
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] index: non-unique
-- [observed] fingerprint: sha256-set @ fingerprints/invoice.customer_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.invoice.customer_id.json
 - [observed] normalization: [none]
 - [inferred:medium] Reference identifier (customer).
 
@@ -40,7 +40,7 @@ flags: [pi:invoice_id]
 - [observed] distinct_count: 354; distinct_ratio: 0.8592; null_rate: 0.0
 - [observed] length: min 8, max 10, avg 8.9
 - [observed] format: mixed; range: ['2021/1/1' .. '2025/9/7']
-- [observed] fingerprint: sha256-set @ fingerprints/invoice.invoice_date.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.invoice.invoice_date.json
 - [observed] normalization: [none]
 - [inferred:high] Date attribute; ISO datetime format observed.
 

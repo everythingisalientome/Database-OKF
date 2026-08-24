@@ -250,7 +250,7 @@ def test_the_sensitive_classification_read_can_be_withdrawn():
 
 def test_the_fingerprint_payload_is_shaped_for_the_bundle(measured):
     fingerprint = profile_of(measured, "account_id").fingerprint
-    assert fingerprint.path == "fingerprints/account.account_id.json"
+    assert fingerprint.path == "fingerprints/SALES.account.account_id.json"
     assert fingerprint.algo == "sha256/8B"
     assert fingerprint.count == 5
     assert len(fingerprint.hashes) == 5

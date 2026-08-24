@@ -22,7 +22,7 @@ flags: []
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] constraint: PRIMARY KEY
 - [observed] top_values: 1(20%), 2(20%), 3(20%), 4(20%), 5(20%)
-- [observed] fingerprint: sha256-set @ fingerprints/media_type.media_type_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.media_type.media_type_id.json
 - [observed] normalization: [none]
 - [inferred:high] Unique identifier; candidate key of media_type.
 
@@ -32,6 +32,6 @@ flags: []
 - [observed] length: min 14, max 27, avg 20.8
 - [observed] format: alpha; range: ['AAC audio file' .. 'Purchased AAC audio file']
 - [observed] top_values: MPEG audio file(20%), Protected AAC audio file(20%), Protected MPEG-4 video file(20%), Purchased AAC audio file(20%), AAC audio file(20%)
-- [observed] fingerprint: sha256-set @ fingerprints/media_type.name.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.media_type.name.json
 - [observed] normalization: [uppercase]
 - [inferred:high] Display name of the media_type record.

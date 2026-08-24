@@ -21,7 +21,7 @@ flags: [pi:customer_id]
 - [observed] format: all-digits; range: [1 .. 59]
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] index: PRIMARY INDEX (Teradata PI)
-- [observed] fingerprint: sha256-set @ fingerprints/customer.customer_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.customer.customer_id.json
 - [observed] normalization: [none]
 - [inferred:high] Unique identifier; candidate key of customer.
 
@@ -30,7 +30,7 @@ flags: [pi:customer_id]
 - [observed] distinct_count: 57; distinct_ratio: 0.9661; null_rate: 0.0
 - [observed] length: min 3, max 9, avg 5.8
 - [observed] format: alpha; range: ['Aaron' .. 'Wyatt']
-- [observed] fingerprint: sha256-set @ fingerprints/customer.first_name.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.customer.first_name.json
 - [observed] normalization: [uppercase]
 - [inferred:low] First name attribute.
 
@@ -39,7 +39,7 @@ flags: [pi:customer_id]
 - [observed] distinct_count: 59; distinct_ratio: 1.0; null_rate: 0.0
 - [observed] length: min 4, max 12, avg 6.9
 - [observed] format: alpha; range: ['Almeida' .. 'Zimmermann']
-- [observed] fingerprint: sha256-set @ fingerprints/customer.last_name.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.customer.last_name.json
 - [observed] normalization: [uppercase]
 - [inferred:low] Last name attribute.
 
@@ -49,7 +49,7 @@ flags: [pi:customer_id]
 - [observed] length: min 5, max 48, avg 16.6
 - [observed] format: alpha; range: ['Apple Inc.' .. 'Woodstock Discos']
 - [observed] top_values: Embraer - Empresa Brasileira de Aeronáutica S.A.(10%), JetBrains s.r.o.(10%), Woodstock Discos(10%), Banco do Brasil S.A.(10%), Riotur(10%), Telus(10%)
-- [observed] fingerprint: sha256-set @ fingerprints/customer.company.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.customer.company.json
 - [observed] normalization: [uppercase]
 - [inferred:medium] Low-cardinality attribute; 10 distinct values.
 
@@ -66,7 +66,7 @@ flags: [pi:customer_id]
 - [observed] distinct_count: 53; distinct_ratio: 0.8983; null_rate: 0.0
 - [observed] length: min 4, max 19, avg 7.8
 - [observed] format: alpha; range: ['Amsterdam' .. 'Yellowknife']
-- [observed] fingerprint: sha256-set @ fingerprints/customer.city.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.customer.city.json
 - [observed] normalization: [trim, uppercase]
 - [inferred:low] City attribute.
 
@@ -76,7 +76,7 @@ flags: [pi:customer_id]
 - [observed] length: min 2, max 6, avg 2.2
 - [observed] format: alpha; range: ['AB' .. 'WI']
 - [observed] top_values: SP(10%), CA(10%), ON(7%), QC(3%), RJ(3%), DF(3%)
-- [observed] fingerprint: sha256-set @ fingerprints/customer.state.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.customer.state.json
 - [observed] normalization: [uppercase]
 - [inferred:medium] Low-cardinality attribute; 25 distinct values.
 
@@ -126,6 +126,6 @@ flags: [pi:customer_id]
 - [observed] format: all-digits; range: [3 .. 5]
 - [observed] index: non-unique
 - [observed] top_values: 3(36%), 4(34%), 5(31%)
-- [observed] fingerprint: sha256-set @ fingerprints/customer.support_rep_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/SALES.customer.support_rep_id.json
 - [observed] normalization: [none]
 - [inferred:high] Assigned support employee; joins to employee.

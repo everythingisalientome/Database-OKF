@@ -22,7 +22,7 @@ flags: []
 - [observed] constraint: PRIMARY KEY
 - [observed] constraint: FOREIGN KEY -> CORE.playlist.playlist_id
 - [observed] top_values: 1(38%), 8(38%), 5(17%), 3(2%), 10(2%), 12(1%)
-- [observed] fingerprint: sha256-set @ fingerprints/playlist_track.playlist_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.playlist_track.playlist_id.json
 - [observed] normalization: [none]
 - [inferred:medium] Reference identifier (playlist).
 
@@ -33,6 +33,6 @@ flags: []
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] constraint: PRIMARY KEY
 - [observed] constraint: FOREIGN KEY -> CORE.track.track_id
-- [observed] fingerprint: sha256-set @ fingerprints/playlist_track.track_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.playlist_track.track_id.json
 - [observed] normalization: [none]
 - [inferred:medium] Reference identifier (track).

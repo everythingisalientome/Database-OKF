@@ -4,3 +4,4 @@ __pycache__/
 .vscode/
 out/
 *.egg-info/
+okf/db/

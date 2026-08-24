@@ -21,7 +21,7 @@ flags: []
 - [observed] format: all-digits; range: [1 .. 347]
 - [observed] dense_sequence: true  # contiguous surrogate range - value overlap non-distinctive
 - [observed] constraint: PRIMARY KEY
-- [observed] fingerprint: sha256-set @ fingerprints/album.album_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.album.album_id.json
 - [observed] normalization: [none]
 - [inferred:high] Unique identifier; candidate key of album.
 
@@ -30,7 +30,7 @@ flags: []
 - [observed] distinct_count: 347; distinct_ratio: 1.0; null_rate: 0.0
 - [observed] length: min 2, max 95, avg 22.7
 - [observed] format: alpha; range: ['...And Justice For All' .. '[1997] Black Light Syndrome']
-- [observed] fingerprint: sha256-set @ fingerprints/album.title.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.album.title.json
 - [observed] normalization: [uppercase]
 - [inferred:high] Display name of the album record.
 
@@ -40,6 +40,6 @@ flags: []
 - [observed] format: all-digits; range: [1 .. 275]
 - [observed] constraint: FOREIGN KEY -> CORE.artist.artist_id
 - [observed] index: non-unique
-- [observed] fingerprint: sha256-set @ fingerprints/album.artist_id.json
+- [observed] fingerprint: sha256/8B @ fingerprints/CORE.album.artist_id.json
 - [observed] normalization: [none]
 - [inferred:medium] Reference identifier (artist).

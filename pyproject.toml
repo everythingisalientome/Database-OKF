@@ -16,6 +16,9 @@ test = ["pytest>=8"]
 postgres = ["psycopg[binary]>=3.1"]
 sqlserver = ["pymssql>=2.3"]
 teradata = ["teradatasql>=17.20"]
+# The llm annotator's client for OpenAI-compatible endpoints; a Tier A-only
+# crawl job should not need an LLM client installed to start.
+llm = ["openai>=1.40"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
