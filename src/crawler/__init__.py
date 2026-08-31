@@ -35,6 +35,7 @@ Layers, lowest first:
     annotate    -- the annotation pass: views, the LLM seam, the sanitizer
     llm         -- the seam's one concrete plug: OpenAI-compatible endpoints
     emit        -- crawl result + annotations -> OKF bundle on disk
+    diff        -- the refresh diff: change report + stale manifest
     config      -- one file per database
     connect     -- driver selection
     cli         -- python -m crawler
@@ -78,6 +79,17 @@ from .catalog import (
 from .config import CrawlConfig, MeasureSettings, SchemaFilter
 from .connect import connect
 from .crawl import crawl
+from .diff import (
+    MANIFEST_CONTRACT,
+    MANIFEST_FORMAT,
+    BundleSnapshot,
+    DiffTolerance,
+    RefreshDiff,
+    TableChange,
+    diff_bundles,
+    diff_snapshots,
+    snapshot,
+)
 from .emit import TOP_VALUES_SHOWN, Emission, PreparedBundle, emit, prepare
 from .errors import (
     AdapterError,
@@ -131,6 +143,8 @@ __all__ = [
     "all_statements", "all_templates", "statement", "statements_for",
     "template", "templates_for",
     "CrawlConfig", "MeasureSettings", "SchemaFilter",
+    "MANIFEST_CONTRACT", "MANIFEST_FORMAT", "BundleSnapshot", "DiffTolerance",
+    "RefreshDiff", "TableChange", "diff_bundles", "diff_snapshots", "snapshot",
     "connect", "crawl", "measure", "run_statement",
     "KEYED_ALGO", "UNKEYED_ALGO", "Hasher", "hasher_for",
     "FORMATS", "classify_column", "classify_value",

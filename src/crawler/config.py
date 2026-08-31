@@ -17,7 +17,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .catalog import ENGINES, SAMPLE_CAP, TOP_N
+from .diff import DiffTolerance
 from .errors import ConfigError
+
+#: Connection keys that would put a secret in a committable file. The rule
+#: is the module docstring's: secrets are never config values, so a config
+#: carrying one is refused outright rather than quietly passed to the driver.
+FORBIDDEN_CONNECTION_KEYS = ("password", "passwd", "pwd", "secret")
 
 
 @dataclass(frozen=True)
@@ -211,6 +217,8 @@ class CrawlConfig:
     connection: dict = field(default_factory=dict)
     #: Everything the measuring pass reads.
     measure: MeasureSettings = field(default_factory=lambda: MeasureSettings())
+    #: What the refresh diff tolerates before a profile shift counts as drift.
+    refresh: DiffTolerance = field(default_factory=DiffTolerance)
 
     def __post_init__(self):
         if not self.database:
@@ -222,6 +230,13 @@ class CrawlConfig:
             )
         if self.expected_table_count is not None and self.expected_table_count < 0:
             raise ConfigError("expected_table_count cannot be negative")
+        for key in self.connection:
+            if str(key).casefold() in FORBIDDEN_CONNECTION_KEYS:
+                raise ConfigError(
+                    f"connection.{key} would put a secret in a committable "
+                    "file; name an environment variable in "
+                    "connection.password_env instead"
+                )
 
     def includes_schema(self, schema: str) -> bool:
         return self.schemas.allows(schema)
@@ -234,19 +249,20 @@ class CrawlConfig:
             "expected_table_count": self.expected_table_count,
             "connection": dict(self.connection),
             "measure": self.measure.to_obj(),
+            "refresh": self.refresh.to_obj(),
         }
 
     @classmethod
     def from_obj(cls, obj: dict) -> CrawlConfig:
         unknown = set(obj) - {
             "database", "engine", "schemas", "expected_table_count",
-            "connection", "measure",
+            "connection", "measure", "refresh",
         }
         if unknown:
             raise ConfigError(
                 f"unknown config keys: {', '.join(sorted(unknown))}. "
                 "A crawl config holds database, engine, schemas, "
-                "expected_table_count, connection and measure."
+                "expected_table_count, connection, measure and refresh."
             )
         try:
             database = obj["database"]
@@ -260,6 +276,7 @@ class CrawlConfig:
             expected_table_count=obj.get("expected_table_count"),
             connection=dict(obj.get("connection") or {}),
             measure=MeasureSettings.from_obj(obj.get("measure")),
+            refresh=DiffTolerance.from_obj(obj.get("refresh")),
         )
 
     @classmethod

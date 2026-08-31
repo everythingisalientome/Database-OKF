@@ -268,6 +268,26 @@ def test_an_unfiltered_crawl_that_does_not_add_up_is_incomplete(pg_rows):
     assert result.reconciliation.status == "INCOMPLETE"
 
 
+def test_a_config_filtered_crawl_reconciles_against_its_filtered_expectation(pg_rows):
+    """expected_table_count is the DBA's count of what this run should
+    catalog — the count *inside* the filter. A filtered crawl with one is
+    verifiable; the account-wide A5 number is recorded but not compared."""
+    pg_rows["A1"] = [
+        *pg_rows["A1"],
+        ("chinook", "archive", "album_2019", "BASE TABLE"),
+    ]
+    result = crawl(
+        FakeConnection(responses_for("postgres", pg_rows)),
+        pg_config(expected_table_count=2),
+        today=CRAWL_DATE,
+    )
+    assert result.scope.config_filtered
+    assert result.reconciliation.status == "COMPLETE"
+    assert result.reconciliation.cataloged_tables == 2
+    assert result.reconciliation.expected_tables == 2
+    assert "cataloged 2 of 2 expected base tables" in result.reconciliation.note
+
+
 def test_a_config_filtered_crawl_without_an_expected_count_is_unverified(pg_rows):
     """Config dropped a schema, so A5's count is not comparable with anything
     the crawl measured. Guessing they match would turn a grant gap into a
