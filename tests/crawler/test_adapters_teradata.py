@@ -208,3 +208,44 @@ def test_a6_reads_an_uncollected_count_as_unknown(adapter):
     stats, _warnings = adapter.parse_column_stats(rows)
     assert stats[0].distinct_count is None
     assert stats[0].null_count is None
+
+
+# -- A7-TD: code objects (answers A8 too) — session 6b -----------------------
+
+
+def test_a7_maps_kinds_and_keeps_request_text_unpadded_but_untrimmed(adapter):
+    rows = [
+        ("FINANCE   ", "ACCT_V    ", "V ", "  REPLACE VIEW x AS SELECT 1"),
+        ("FINANCE   ", "MONTH_END ", "M ", "EXEC something"),
+        ("FINANCE   ", "LOAD_PROC ", "P ", None),
+    ]
+    objects, warnings = adapter.parse_code_objects(rows)
+    assert warnings == []
+    assert [(o.schema, o.name, o.kind) for o in objects] == [
+        ("FINANCE", "ACCT_V", "VIEW"),
+        ("FINANCE", "MONTH_END", "MACRO"),
+        ("FINANCE", "LOAD_PROC", "PROCEDURE"),
+    ]
+    # RequestText is SQL, not a dictionary name: leading whitespace survives.
+    assert objects[0].definition == "  REPLACE VIEW x AS SELECT 1"
+    assert objects[2].definition is None
+
+
+def test_a7_flags_text_at_the_dictionary_cut_as_truncated(adapter):
+    long_text = "SELECT " + "x" * 12500
+    rows = [("FINANCE", "BIG_V", "V", long_text)]
+    (obj,), _warnings = adapter.parse_code_objects(rows)
+    assert obj.truncated is True
+
+
+def test_a7_foreign_server_rows_are_external_references_not_code(adapter):
+    rows = [
+        ("FINANCE   ", "ACCT_V    ", "V ", "REPLACE VIEW x AS SELECT 1"),
+        ("FINANCE   ", "REMOTE_FEED", "E ", None),
+    ]
+    objects, _ = adapter.parse_code_objects(rows)
+    assert [o.name for o in objects] == ["ACCT_V"]
+    references, _ = adapter.parse_external_references(rows)
+    assert [(r.kind, r.target, r.source) for r in references] == [
+        ("foreign-server", "FINANCE.REMOTE_FEED", "DBC.TablesV"),
+    ]

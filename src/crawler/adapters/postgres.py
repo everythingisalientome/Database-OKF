@@ -24,7 +24,13 @@ how (its "Interpretation rules (crawler MUST apply)"):
 
 from __future__ import annotations
 
-from ..results import STATS_ESTIMATE, ColumnStats, TableStats
+from ..results import (
+    STATS_ESTIMATE,
+    CodeObject,
+    ColumnStats,
+    ExternalReference,
+    TableStats,
+)
 from .ansi import AnsiAdapter
 from .base import (
     Parsed,
@@ -82,6 +88,47 @@ class PostgresAdapter(AnsiAdapter):
                 stats_date=as_date(stats_date),
             )
         return sorted(seen.values(), key=lambda s: (s.schema, s.table)), []
+
+    # -- A7: code-object definitions ---------------------------------------
+
+    def parse_code_objects(self, rows: Rows, *, key: str = "A7") -> Parsed:
+        """Views from information_schema.views (``A7``) and routines from
+        information_schema.routines (``A7-routines``). A routine whose
+        ``routine_definition`` is NULL — a C-language or otherwise opaque
+        function — is recorded with no definition; the extractor counts it
+        unparsed rather than pretending it read anything."""
+        objects, warnings = [], []
+        for row in rows:
+            if key == "A7-routines":
+                schema, name, routine_type, definition = row
+                kind = (as_text(routine_type) or "ROUTINE").upper()
+            else:
+                schema, name, definition = row
+                kind = "VIEW"
+            objects.append(
+                CodeObject(
+                    schema=as_text(schema),
+                    name=as_text(name),
+                    kind=kind,
+                    definition=definition if isinstance(definition, str) else None,
+                )
+            )
+        return objects, warnings
+
+    # -- A8: cross-database references -------------------------------------
+
+    def parse_external_references(self, rows: Rows, *, key: str = "A8") -> Parsed:
+        """Foreign servers from pg_foreign_server — recorded lineage only."""
+        references = [
+            ExternalReference(
+                target=as_text(srvname) or "",
+                kind="foreign-server",
+                source="pg_foreign_server",
+                detail=as_text(fdwname),
+            )
+            for srvname, fdwname in rows
+        ]
+        return references, []
 
     def parse_column_stats(self, rows: Rows) -> Parsed:
         """Per-column distinct estimates and null rates from pg_stats."""

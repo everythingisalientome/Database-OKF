@@ -15,7 +15,7 @@ SYSCAT/SYSIBM/SYSSTAT; Teradata DBC/Sys*; PostgreSQL
 pg_catalog/information_schema. Exclusions are recorded in index.md so
 scope is auditable.
 
-Run order per database: A1 → A2 → A3 → A4 → (per table) B1 → (per column) B2 → B3 → B4 → C1 → A5.
+Run order per database: A1 → A2 → A3 → A4 → A7 → A8 → (per table) B1 → (per column) B2 → B3 → B4 → C1 → A5.
 
 ---
 
@@ -248,6 +248,97 @@ SELECT DatabaseName, TableName, ColumnName, RowCount, UniqueValueCount,
 FROM DBC.StatsV;
 ```
 Teradata: `DBC.StatsV` (RowCount, UniqueValueCount, LastCollectTimeStamp).
+
+### A7. Code-object definitions (views / procedures / triggers — join-intent text)
+
+Legacy estates declare joins in code: view SQL, procedure bodies, and the
+trigger-enforced "FKs" of systems that never declared constraints. Definitions
+are read at catalog cost, stored in the CRAWL JSON ONLY (never in bundles —
+procedure text can embed literals or credentials), and mined by a conservative
+extractor: equality predicates in ON/WHERE with alias resolution. Unparseable
+objects are counted, never guessed. Extracted same-database join facts emit as
+`[observed] join-intent:` lines; cross-database references (db links, linked
+servers, multi-part names) emit into index.md as external-references.
+
+ANSI/PostgreSQL (views; PG functions via information_schema.routines):
+```sql
+SELECT table_schema, table_name, view_definition FROM information_schema.views
+WHERE table_schema NOT IN ('pg_catalog', 'information_schema');
+```
+```sql
+SELECT routine_schema, routine_name, routine_type, routine_definition
+FROM information_schema.routines
+WHERE routine_schema NOT IN ('pg_catalog', 'information_schema');
+```
+
+SQL Server (one block: views, procs, functions, triggers):
+```sql
+SELECT s.name AS table_schema, o.name AS object_name, o.type AS object_type,
+       m.definition
+FROM sys.sql_modules m
+JOIN sys.objects o ON o.object_id = m.object_id
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.type IN ('V', 'P', 'FN', 'TF', 'IF', 'TR');
+```
+
+Oracle (views; source is line-numbered — crawler reassembles):
+```sql
+SELECT owner, view_name, text FROM all_views;
+```
+```sql
+SELECT owner, name, type, line, text FROM all_source
+WHERE type IN ('PROCEDURE', 'FUNCTION', 'PACKAGE BODY', 'TRIGGER')
+ORDER BY owner, name, type, line;
+```
+
+DB2:
+```sql
+SELECT viewschema, viewname, text FROM syscat.views;
+```
+```sql
+SELECT routineschema, routinename, text FROM syscat.routines;
+```
+```sql
+SELECT trigschema, trigname, text FROM syscat.triggers;
+```
+
+Teradata (UNTESTED until dry run; RequestText truncates ~12.5k chars — flag
+truncated objects rather than parse partial SQL):
+```sql
+SELECT DatabaseName, TableName, TableKind, RequestText
+FROM DBC.TablesV
+WHERE TableKind IN ('V', 'M', 'P', 'E');
+```
+
+### A8. Cross-database reference inventory (recorded lineage between SORs)
+
+Oracle:
+```sql
+SELECT owner, db_link, host FROM all_db_links;
+```
+```sql
+SELECT owner, synonym_name, table_owner, table_name, db_link
+FROM all_synonyms WHERE db_link IS NOT NULL;
+```
+SQL Server:
+```sql
+SELECT name, data_source, provider FROM sys.servers WHERE is_linked = 1;
+```
+```sql
+SELECT s.name AS schema_name, sy.name AS synonym_name, sy.base_object_name
+FROM sys.synonyms sy JOIN sys.schemas s ON s.schema_id = sy.schema_id;
+```
+PostgreSQL:
+```sql
+SELECT s.srvname, w.fdwname FROM pg_foreign_server s
+JOIN pg_foreign_data_wrapper w ON w.oid = s.srvfdw;
+```
+DB2 (federation nicknames):
+```sql
+SELECT tabschema, tabname, remote_server, remote_schema, remote_table
+FROM syscat.nicknames;
+```
+Teradata: foreign-server objects surface in A7's TableKind kinds; UNTESTED.
 
 ### A5. Reconciliation (run last — detects grant gaps)
 

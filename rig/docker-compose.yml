@@ -85,5 +85,5 @@ services:
       - -c
       - >-
         /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P "Crawler!Rig2026"
-        -C -b -i /chinook/01-chinook-schema.sql,/chinook/02-chinook-data.sql
+        -C -b -i /chinook/01-chinook-schema.sql,/chinook/02-chinook-data.sql,/chinook/03-rig-objects.sql
     restart: "no"

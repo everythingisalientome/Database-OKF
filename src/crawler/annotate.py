@@ -90,6 +90,9 @@ class ColumnView:
     #: Rendered descriptors, e.g. ``non-unique``,
     #: ``PRIMARY INDEX (Teradata PI)``.
     indexes: tuple[str, ...] = ()
+    #: Code-declared join facts (A7), rendered the way the table file will
+    #: carry them: ``<col> = <schema.table.col> (source: <schema.object>)``.
+    join_intents: tuple[str, ...] = ()
     #: Why a gated column carries no fingerprint — the specs/04 suppression
     #: vocabulary (``sensitive`` | ``budget`` | ``unparseable-temporal``), or
     #: None where a fingerprint exists or the column was never eligible.
@@ -122,6 +125,8 @@ class ColumnView:
             out["constraints"] = list(self.constraints)
         if self.indexes:
             out["indexes"] = list(self.indexes)
+        if self.join_intents:
+            out["join_intents"] = list(self.join_intents)
         if self.fingerprint_suppressed:
             out["fingerprint_suppressed"] = self.fingerprint_suppressed
         if self.source != "live":
@@ -204,6 +209,7 @@ def table_views(result: CrawlResult) -> tuple[TableView, ...]:
     columns_of: dict[tuple[str, str], list] = {}
     for column in result.columns:
         columns_of.setdefault((column.schema, column.table), []).append(column)
+    join_intents = _join_intent_descriptors(result)
 
     views = []
     for table in sorted(result.base_tables, key=lambda t: (t.schema, t.name)):
@@ -230,7 +236,10 @@ def table_views(result: CrawlResult) -> tuple[TableView, ...]:
                 stats_date=stats_date,
                 flags=_table_flags(result, table, profile),
                 columns=tuple(
-                    _column_view(result, column, column_profiles, column_stats)
+                    _column_view(
+                        result, column, column_profiles, column_stats,
+                        join_intents,
+                    )
                     for column in columns_of.get(key, [])
                 ),
             )
@@ -267,7 +276,34 @@ def _table_flags(result, table, profile) -> tuple[str, ...]:
     return tuple(flags)
 
 
-def _column_view(result, column, column_profiles, column_stats) -> ColumnView:
+def _join_intent_descriptors(result) -> dict[tuple[str, str, str], tuple[str, ...]]:
+    """Rendered join-intent lines per column, both directions of each fact.
+
+    Only facts between base tables render: a view is cataloged but not
+    emitted, so a line pointing at one would reference a file the bundle
+    does not have. Facts touching views stay in the crawl JSON.
+    """
+    base = {(t.schema, t.name) for t in result.base_tables}
+    lines: dict[tuple[str, str, str], list[str]] = {}
+    for fact in result.join_intents:
+        if (fact.schema, fact.table) not in base:
+            continue
+        if (fact.other_schema, fact.other_table) not in base:
+            continue
+        lines.setdefault((fact.schema, fact.table, fact.column), []).append(
+            f"{fact.column} = {fact.other_qualified} (source: {fact.source})"
+        )
+        lines.setdefault(
+            (fact.other_schema, fact.other_table, fact.other_column), []
+        ).append(
+            f"{fact.other_column} = {fact.qualified} (source: {fact.source})"
+        )
+    return {key: tuple(sorted(values)) for key, values in lines.items()}
+
+
+def _column_view(
+    result, column, column_profiles, column_stats, join_intents=None
+) -> ColumnView:
     key = (column.schema, column.table, column.name)
     profile = column_profiles.get(key)
     constraints = _constraint_descriptors(result, column)
@@ -280,6 +316,7 @@ def _column_view(result, column, column_profiles, column_stats) -> ColumnView:
         "nullable": column.nullable,
         "constraints": constraints,
         "indexes": indexes,
+        "join_intents": (join_intents or {}).get(key, ()),
     }
     if profile is not None:
         # The measuring pass already withholds a sensitive column's bounds and

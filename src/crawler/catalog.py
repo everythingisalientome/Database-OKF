@@ -32,14 +32,29 @@ CONSTRAINTS = "constraints"
 INDEXES = "indexes"
 TABLE_STATS = "table_stats"
 COLUMN_STATS = "column_stats"
+CODE_OBJECTS = "code_objects"
+EXTERNAL_REFS = "external_refs"
 RECONCILIATION = "reconciliation"
 
-#: Statement keys in the order the spec fixes: inventory first, A5 last.
-TIER_A = ("A1", "A2", "A3", "A4", "A6", "A6-columns", "A5")
+#: Statement keys in the order the spec fixes: inventory first, A7/A8 after
+#: A4 (the catalog's run-order line), A5 last.
+TIER_A = (
+    "A1", "A2", "A3", "A4",
+    "A7", "A7-routines", "A8", "A8-synonyms",
+    "A6", "A6-columns", "A5",
+)
 
 #: Catalog query ids. Every engine needs a block for each of these; several
-#: keys can implement one id (SQL Server answers A6 with two blocks).
-QUERY_IDS = ("A1", "A2", "A3", "A4", "A6", "A5")
+#: keys can implement one id (SQL Server answers A6 with two blocks), and one
+#: block can answer for another id (see :data:`ANSWERED_ELSEWHERE`).
+QUERY_IDS = ("A1", "A2", "A3", "A4", "A7", "A8", "A6", "A5")
+
+#: Query ids an engine answers through another query's block rather than a
+#: block of their own. The catalog, on Teradata's A8: "foreign-server objects
+#: surface in A7's TableKind kinds" — the A7-TD block selects TableKind 'E'
+#: and its reader emits those rows as external references, so there is no
+#: separate A8 statement to run and nothing is skipped or gapped.
+ANSWERED_ELSEWHERE: dict[tuple[str, str], str] = {("teradata", "A8"): "A7"}
 
 #: Keys without which there is no crawl at all.
 REQUIRED = ("A1", "A2")
@@ -225,6 +240,92 @@ WHERE sc.stats_column_id = 1
 GROUP BY sch.name, t.name, c.name, sp.rows, sp.rows_sampled, sp.last_updated;""",
 )
 
+_A7_HEADING = (
+    "A7. Code-object definitions (views / procedures / triggers — "
+    "join-intent text)"
+)
+_A8_HEADING = (
+    "A8. Cross-database reference inventory (recorded lineage between SORs)"
+)
+
+A7_VIEWS_POSTGRES = Statement(
+    key="A7",
+    query_id="A7",
+    variant="postgres",
+    heading=_A7_HEADING,
+    provides=(CODE_OBJECTS,),
+    sql="""SELECT table_schema, table_name, view_definition FROM information_schema.views
+WHERE table_schema NOT IN ('pg_catalog', 'information_schema');""",
+)
+
+A7_ROUTINES_POSTGRES = Statement(
+    key="A7-routines",
+    query_id="A7",
+    variant="postgres",
+    heading=_A7_HEADING,
+    provides=(CODE_OBJECTS,),
+    sql="""SELECT routine_schema, routine_name, routine_type, routine_definition
+FROM information_schema.routines
+WHERE routine_schema NOT IN ('pg_catalog', 'information_schema');""",
+)
+
+A7_SQLSERVER = Statement(
+    key="A7",
+    query_id="A7",
+    variant="sqlserver",
+    heading=_A7_HEADING,
+    provides=(CODE_OBJECTS,),
+    sql="""SELECT s.name AS table_schema, o.name AS object_name, o.type AS object_type,
+       m.definition
+FROM sys.sql_modules m
+JOIN sys.objects o ON o.object_id = m.object_id
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.type IN ('V', 'P', 'FN', 'TF', 'IF', 'TR');""",
+)
+
+A7_TERADATA = Statement(
+    key="A7",
+    query_id="A7",
+    variant="teradata",
+    heading=_A7_HEADING,
+    # One block, both readers: TableKind 'V'/'M'/'P' rows are code objects
+    # and 'E' rows are foreign-server objects — the catalog's answer to A8
+    # on this engine (see ANSWERED_ELSEWHERE).
+    provides=(CODE_OBJECTS, EXTERNAL_REFS),
+    sql="""SELECT DatabaseName, TableName, TableKind, RequestText
+FROM DBC.TablesV
+WHERE TableKind IN ('V', 'M', 'P', 'E');""",
+)
+
+A8_POSTGRES = Statement(
+    key="A8",
+    query_id="A8",
+    variant="postgres",
+    heading=_A8_HEADING,
+    provides=(EXTERNAL_REFS,),
+    sql="""SELECT s.srvname, w.fdwname FROM pg_foreign_server s
+JOIN pg_foreign_data_wrapper w ON w.oid = s.srvfdw;""",
+)
+
+A8_SQLSERVER = Statement(
+    key="A8",
+    query_id="A8",
+    variant="sqlserver",
+    heading=_A8_HEADING,
+    provides=(EXTERNAL_REFS,),
+    sql="""SELECT name, data_source, provider FROM sys.servers WHERE is_linked = 1;""",
+)
+
+A8_SYNONYMS_SQLSERVER = Statement(
+    key="A8-synonyms",
+    query_id="A8",
+    variant="sqlserver",
+    heading=_A8_HEADING,
+    provides=(EXTERNAL_REFS,),
+    sql="""SELECT s.name AS schema_name, sy.name AS synonym_name, sy.base_object_name
+FROM sys.synonyms sy JOIN sys.schemas s ON s.schema_id = sy.schema_id;""",
+)
+
 A5_ANSI = Statement(
     key="A5",
     query_id="A5",
@@ -317,6 +418,9 @@ STATEMENTS: dict[str, dict[str, Statement]] = {
         "A2": A2_ANSI,
         "A3": A3_ANSI,
         "A4": A4_POSTGRES,
+        "A7": A7_VIEWS_POSTGRES,
+        "A7-routines": A7_ROUTINES_POSTGRES,
+        "A8": A8_POSTGRES,
         "A6": A6_POSTGRES,
         "A5": A5_ANSI,
     },
@@ -325,6 +429,9 @@ STATEMENTS: dict[str, dict[str, Statement]] = {
         "A2": A2_ANSI,
         "A3": A3_ANSI,
         "A4": A4_SQLSERVER,
+        "A7": A7_SQLSERVER,
+        "A8": A8_SQLSERVER,
+        "A8-synonyms": A8_SYNONYMS_SQLSERVER,
         "A6": A6_SQLSERVER,
         "A6-columns": A6_COLUMNS_SQLSERVER,
         "A5": A5_ANSI,
@@ -334,10 +441,21 @@ STATEMENTS: dict[str, dict[str, Statement]] = {
         "A2": A2_TERADATA,
         "A3": A3_TERADATA,
         "A4": A4_TERADATA,
+        "A7": A7_TERADATA,
         "A6": A6_TERADATA,
         "A5": A5_TERADATA,
     },
 }
+
+
+def covered_query_ids(engine: str) -> set[str]:
+    """Query ids ``engine`` can answer: its own blocks, plus the ids the
+    catalog documents as answered inside another query's block."""
+    covered = {stmt.query_id for stmt in statements_for(engine)}
+    for (gap_engine, query_id), via in ANSWERED_ELSEWHERE.items():
+        if gap_engine == engine and via in covered:
+            covered.add(query_id)
+    return covered
 
 
 def statement(engine: str, key: str) -> Statement | None:

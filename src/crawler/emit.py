@@ -260,6 +260,11 @@ def _column_block(column: ColumnView, profile, annotation):
         lines.append(_observed(f"constraint: {constraint}"))
     for index in column.indexes:
         lines.append(_observed(f"index: {index}"))
+    for intent in column.join_intents:
+        # A7: code-declared join evidence, deterministic extraction — the
+        # one [observed] line in the file that came from somebody's SQL
+        # rather than the dictionary, which is why it names its source.
+        lines.append(_observed(f"join-intent: {intent}"))
     if column.sensitive:
         lines.append(_observed(_SENSITIVE_LINE))
 
@@ -343,10 +348,41 @@ def _index_document(result, annotations: Annotations, entries) -> IndexDocument:
                 completeness,
             ]
         ),
-        summary=[_inferred(database.confidence, database.summary)],
+        summary=[
+            _inferred(database.confidence, database.summary),
+            *_code_object_lines(result),
+        ],
         section="Tables",
         entries=list(entries),
     )
+
+
+def _code_object_lines(result) -> list[ContentLine]:
+    """The specs/01 index.md lines A7/A8 owe: the unparsed-object count and
+    the recorded external references. Derived facts only — the definitions
+    themselves stay in the crawl JSON and never reach a bundle.
+
+    The count line renders whenever A7 ran, zero included: "no code objects"
+    and "A7 never ran" must not read identically.
+    """
+    ran_a7 = any(
+        q.query_id == "A7" and q.status == "ok" for q in result.queries
+    )
+    lines = []
+    if ran_a7 or result.code_objects:
+        lines.append(
+            _observed(
+                f"code_objects: {len(result.code_objects)}; "
+                f"unparsed: {result.unparsed_code_objects}"
+            )
+        )
+    for reference in result.external_references:
+        text = f"external-reference: {reference.kind} {reference.target}"
+        if reference.detail:
+            text += f" [{reference.detail}]"
+        text += f" (source: {reference.source})"
+        lines.append(_observed(text))
+    return lines
 
 
 __all__ = [

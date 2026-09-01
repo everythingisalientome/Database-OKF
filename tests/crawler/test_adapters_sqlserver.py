@@ -118,3 +118,50 @@ def test_table_row_counts_are_not_estimates(adapter):
     """dm_db_partition_stats counts rows; it does not estimate them."""
     stats, _warnings = adapter.parse_table_stats([("dbo", "album", 347)])
     assert stats[0].estimated is False
+
+
+# -- A7/A8 — session 6b ------------------------------------------------------
+
+
+def test_a7_maps_object_types_and_keeps_null_definitions(adapter):
+    rows = [
+        ("dbo", "album_artist_names", "V ", "CREATE VIEW ... AS SELECT 1"),
+        ("dbo", "rig_dynamic_count", "P ", "CREATE PROCEDURE ..."),
+        ("dbo", "fn_total", "FN", "CREATE FUNCTION ..."),
+        ("dbo", "tvf_rows", "TF", "CREATE FUNCTION ..."),
+        ("dbo", "itvf_rows", "IF", "CREATE FUNCTION ..."),
+        ("dbo", "trg_audit", "TR", "CREATE TRIGGER ..."),
+        ("dbo", "encrypted_proc", "P ", None),
+    ]
+    objects, warnings = adapter.parse_code_objects(rows)
+    assert warnings == []
+    assert [o.kind for o in objects] == [
+        "VIEW", "PROCEDURE", "FUNCTION", "FUNCTION", "FUNCTION", "TRIGGER",
+        "PROCEDURE",
+    ]
+    assert objects[-1].definition is None  # encrypted: recorded, not read
+
+
+def test_a8_reads_linked_servers_with_their_data_source(adapter):
+    rows = [("BILLING_DW", "tcp:dw.internal,1433", "SQLNCLI")]
+    references, _ = adapter.parse_external_references(rows, key="A8")
+    [reference] = references
+    assert reference.kind == "linked-server"
+    assert reference.target == "BILLING_DW"
+    assert reference.detail == "tcp:dw.internal,1433"
+    assert reference.source == "sys.servers"
+
+
+def test_a8_synonyms_keep_only_cross_database_targets(adapter):
+    rows = [
+        ("dbo", "local_alias", "[dbo].[album]"),
+        ("dbo", "same_server", "[otherdb].[dbo].[account]"),
+        ("dbo", "cross_server", "[BILLING_DW].[dw].[dbo].[ledger]"),
+        ("dbo", "bare_alias", "album"),
+    ]
+    references, _ = adapter.parse_external_references(rows, key="A8-synonyms")
+    assert [(r.target, r.source) for r in references] == [
+        ("[otherdb].[dbo].[account]", "dbo.same_server"),
+        ("[BILLING_DW].[dw].[dbo].[ledger]", "dbo.cross_server"),
+    ]
+    assert {r.kind for r in references} == {"synonym"}

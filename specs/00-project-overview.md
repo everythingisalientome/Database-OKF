@@ -52,8 +52,13 @@ joins. Two output grades (see step 3 spec). Human review happens here.
 4. **Provenance tags on every line.** `[observed]` = read from metadata/data;
    `[inferred]` = LLM-written with confidence marker; `[confirmed]` =
    human-validated. Step 3 must be able to distinguish fact from guess.
-5. **No-FK signal hierarchy.** Declared constraints are recorded when present
-   but expected absent. Primary evidence: measured value overlap — scored as
+5. **No-FK signal hierarchy.** Declared evidence — A3 constraints AND
+   code-declared joins mined from view/procedure/trigger SQL (A7) plus
+   recorded cross-database references (A8) — is captured when present and
+   ranks above inference; code-declared edges seed candidates and waive the
+   int-pair name gate (designer intent substitutes for name agreement) but,
+   since code goes stale, cap at medium confidence until corroborated by
+   measured overlap or a human. Declared constraints otherwise expected absent. Primary evidence: measured value overlap — scored as
    **containment** |A∩B|/min(|A|,|B|), not Jaccard (FKs reference subsets;
    Jaccard under-scores true edges — fixture-validated) — plus index
    membership and Teradata Primary Index. Name similarity is a tiebreaker,

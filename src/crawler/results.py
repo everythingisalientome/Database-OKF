@@ -309,6 +309,146 @@ class ColumnStats:
         )
 
 
+#: Code-object parse outcomes (A7). ``unparsed`` is a count, never a guess:
+#: an object the conservative extractor could not read contributes no facts,
+#: and the reason travels with the record.
+PARSED = "parsed"
+UNPARSED = "unparsed"
+
+
+@dataclass(frozen=True)
+class CodeObject:
+    """One A7 code object: a view, procedure, function, trigger or macro.
+
+    ``definition`` is the object's stored SQL text. It lives in the crawl
+    JSON ONLY — never in any bundle — because procedure text can embed
+    literals or credentials (specs/01, catalog A7). Emission reads the
+    derived facts (:class:`JoinIntent`, :class:`ExternalReference`, the
+    unparsed count) and must never read this field.
+    """
+
+    schema: str
+    name: str
+    kind: str  # VIEW | PROCEDURE | FUNCTION | TRIGGER | MACRO | ...
+    definition: str | None = None
+    #: True where the dictionary truncated the text (Teradata RequestText).
+    #: A truncated object is never mined — partial SQL parses into wrong
+    #: facts — so it always counts as unparsed.
+    truncated: bool = False
+    status: str = PARSED
+    #: Why the object is unparsed; empty for a parsed object.
+    reason: str = ""
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.schema}.{self.name}"
+
+    def to_obj(self) -> dict:
+        return {
+            "schema": self.schema,
+            "name": self.name,
+            "kind": self.kind,
+            "definition": self.definition,
+            "truncated": self.truncated,
+            "status": self.status,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_obj(cls, obj: dict) -> CodeObject:
+        return cls(
+            schema=obj["schema"],
+            name=obj["name"],
+            kind=obj["kind"],
+            definition=obj.get("definition"),
+            truncated=obj.get("truncated", False),
+            status=obj.get("status", PARSED),
+            reason=obj.get("reason", ""),
+        )
+
+
+@dataclass(frozen=True)
+class JoinIntent:
+    """One code-declared same-database join fact (A7 extraction).
+
+    Symmetric by construction: the sides are stored sorted so the same
+    predicate read from two objects (or twice from one) deduplicates, and
+    emission writes one ``join-intent:`` line on each side's column.
+    """
+
+    schema: str
+    table: str
+    column: str
+    other_schema: str
+    other_table: str
+    other_column: str
+    #: Qualified name of the object whose SQL declared the join.
+    source: str
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.schema}.{self.table}.{self.column}"
+
+    @property
+    def other_qualified(self) -> str:
+        return f"{self.other_schema}.{self.other_table}.{self.other_column}"
+
+    def to_obj(self) -> dict:
+        return {
+            "schema": self.schema,
+            "table": self.table,
+            "column": self.column,
+            "other_schema": self.other_schema,
+            "other_table": self.other_table,
+            "other_column": self.other_column,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_obj(cls, obj: dict) -> JoinIntent:
+        return cls(
+            schema=obj["schema"],
+            table=obj["table"],
+            column=obj["column"],
+            other_schema=obj["other_schema"],
+            other_table=obj["other_table"],
+            other_column=obj["other_column"],
+            source=obj["source"],
+        )
+
+
+@dataclass(frozen=True)
+class ExternalReference:
+    """A recorded cross-database reference (A8, or a multi-part name in A7
+    text). Lineage between SORs — never a join candidate, never followed."""
+
+    #: What is referenced, as the dictionary or the SQL spelled it.
+    target: str
+    #: multi-part-name | linked-server | synonym | foreign-server | db-link
+    kind: str
+    #: The object or dictionary view the reference came from.
+    source: str
+    #: Engine-specific extra (a linked server's data source), or None.
+    detail: str | None = None
+
+    def to_obj(self) -> dict:
+        return {
+            "target": self.target,
+            "kind": self.kind,
+            "source": self.source,
+            "detail": self.detail,
+        }
+
+    @classmethod
+    def from_obj(cls, obj: dict) -> ExternalReference:
+        return cls(
+            target=obj["target"],
+            kind=obj["kind"],
+            source=obj["source"],
+            detail=obj.get("detail"),
+        )
+
+
 @dataclass(frozen=True)
 class Scope:
     """Which schemas this crawl skipped, and why.
@@ -726,6 +866,12 @@ class CrawlResult:
     indexes: list[Index] = field(default_factory=list)
     table_stats: list[TableStats] = field(default_factory=list)
     column_stats: list[ColumnStats] = field(default_factory=list)
+    #: A7 code objects, definitions included — crawl JSON only, never bundles.
+    code_objects: list[CodeObject] = field(default_factory=list)
+    #: Same-database join facts mined from code-object SQL (A7).
+    join_intents: list[JoinIntent] = field(default_factory=list)
+    #: Recorded cross-database references (A8 + multi-part names in A7 text).
+    external_references: list[ExternalReference] = field(default_factory=list)
     #: The measuring pass. Empty on a Tier A-only crawl, which is a
     #: complete crawl in its own right: the inventory does not depend on it.
     table_profiles: list[TableProfile] = field(default_factory=list)
@@ -745,6 +891,11 @@ class CrawlResult:
     @property
     def base_tables(self) -> list[Table]:
         return [t for t in self.tables if t.is_base_table]
+
+    @property
+    def unparsed_code_objects(self) -> int:
+        """The index.md count: objects the extractor refused to guess at."""
+        return sum(1 for o in self.code_objects if o.status == UNPARSED)
 
     @property
     def completeness(self) -> str:
@@ -768,6 +919,11 @@ class CrawlResult:
             "indexes": [i.to_obj() for i in self.indexes],
             "table_stats": [s.to_obj() for s in self.table_stats],
             "column_stats": [s.to_obj() for s in self.column_stats],
+            "code_objects": [o.to_obj() for o in self.code_objects],
+            "join_intents": [j.to_obj() for j in self.join_intents],
+            "external_references": [
+                r.to_obj() for r in self.external_references
+            ],
             "measured": self.measured,
             "table_profiles": [p.to_obj() for p in self.table_profiles],
             "column_profiles": [p.to_obj() for p in self.column_profiles],
@@ -795,6 +951,16 @@ class CrawlResult:
             indexes=[Index.from_obj(o) for o in obj.get("indexes", [])],
             table_stats=[TableStats.from_obj(o) for o in obj.get("table_stats", [])],
             column_stats=[ColumnStats.from_obj(o) for o in obj.get("column_stats", [])],
+            code_objects=[
+                CodeObject.from_obj(o) for o in obj.get("code_objects", [])
+            ],
+            join_intents=[
+                JoinIntent.from_obj(o) for o in obj.get("join_intents", [])
+            ],
+            external_references=[
+                ExternalReference.from_obj(o)
+                for o in obj.get("external_references", [])
+            ],
             measured=obj.get("measured", False),
             table_profiles=[
                 TableProfile.from_obj(o) for o in obj.get("table_profiles", [])

@@ -25,6 +25,13 @@ no database access. No process context — relationships are structural.
 3. **Overlap scoring.** Jaccard similarity on hashed fingerprints (or minhash
    estimate). Record the normalization rules that were applied on each side —
    if they differ, record both; step 3 must replicate them in SQL.
+3b. **Code-declared evidence.** join-intent lines and external references
+   from step 1 (A7/A8) seed candidates directly (even where fingerprints are
+   absent), waive the integer-pair name gate, and add the strongest
+   non-measured boost. Code-declared + containment >= 0.7 justifies `high`;
+   code-declared alone caps at `medium` with an explicit
+   `no-value-evidence` marker (code goes stale — a human or measurement
+   must corroborate before Grade A).
 4. **Structural boosts.** Additive score boosts: both sides indexed; either
    side unique-indexed; both sides Teradata PI (strongest boost — PI choice
    encodes original join design); name similarity (tiebreaker weight only).

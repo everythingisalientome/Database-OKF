@@ -154,6 +154,19 @@ class Adapter(ABC):
     def parse_column_stats(self, rows: Rows) -> Parsed:
         raise AdapterError(f"{self.engine}: A6 rows have no column-stats reader")
 
+    def parse_code_objects(self, rows: Rows, *, key: str = "A7") -> Parsed:
+        """A7 rows as :class:`~crawler.results.CodeObject` items. ``key``
+        picks the block where one query id has several (PostgreSQL's views
+        and routines blocks return different shapes)."""
+        raise AdapterError(f"{self.engine}: {key} rows have no code-object reader")
+
+    def parse_external_references(self, rows: Rows, *, key: str = "A8") -> Parsed:
+        """A8 rows (or the A7 rows that answer for A8) as
+        :class:`~crawler.results.ExternalReference` items."""
+        raise AdapterError(
+            f"{self.engine}: {key} rows have no external-reference reader"
+        )
+
     def parse_reconciliation(self, rows: Rows) -> tuple[int | None, list]:
         raise AdapterError(f"{self.engine}: A5 rows have no reader")
 

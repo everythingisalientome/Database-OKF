@@ -320,7 +320,12 @@ def validate_index(doc: IndexDocument, *, bundle: Bundle | None = None) -> list[
         out.append(Issue("I006", "index has no bundle-level description "
                                  "(layer 1 of the index.md contract)", doc.path))
     elif has_single:
-        text = " ".join(l.text for l in doc.summary)
+        # The layer-1 description is the annotator's prose. [observed]
+        # summary lines (unparsed-object counts, external references) are
+        # structural facts, not sentences of it.
+        text = " ".join(
+            l.text for l in doc.summary if not l.provenance.is_observed
+        )
         count = _sentence_count(text)
         low, high = SUMMARY_SENTENCES
         if not low <= count <= high:

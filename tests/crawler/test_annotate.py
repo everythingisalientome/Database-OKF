@@ -136,6 +136,43 @@ class TestTableViews:
         )
         assert customer_id.indexes == ("non-unique",)
 
+    def test_join_intents_render_on_both_sides_but_never_toward_a_view(self):
+        """Session 6b: code-declared joins are derived artifacts like
+        constraint membership — the annotator may see them, and the rendered
+        descriptor is exactly the line the bundle will carry. A fact whose
+        other side is a non-emitted VIEW renders nowhere."""
+        from crawler.results import JoinIntent
+
+        result = sales_result()
+        result.tables.append(Table("SALES", "customer", "BASE TABLE"))
+        result.columns.append(
+            Column("SALES", "customer", "customer_id", 1, "INT", "I", False)
+        )
+        result.tables.append(Table("SALES", "inv_v", "VIEW"))
+        result.columns.append(
+            Column("SALES", "inv_v", "invoice_id", 1, "INT", "I", True)
+        )
+        result.join_intents = [
+            JoinIntent(schema="SALES", table="customer", column="customer_id",
+                       other_schema="SALES", other_table="invoice",
+                       other_column="customer_id", source="SALES.inv_v"),
+            JoinIntent(schema="SALES", table="inv_v", column="invoice_id",
+                       other_schema="SALES", other_table="invoice",
+                       other_column="invoice_id", source="SALES.inv_v"),
+        ]
+        customer, invoice = table_views(result)
+        assert customer.columns[0].join_intents == (
+            "customer_id = SALES.invoice.customer_id (source: SALES.inv_v)",
+        )
+        by_name = {c.name: c for c in invoice.columns}
+        assert by_name["customer_id"].join_intents == (
+            "customer_id = SALES.customer.customer_id (source: SALES.inv_v)",
+        )
+        assert by_name["invoice_id"].join_intents == ()  # view-side fact
+        assert by_name["customer_id"].to_obj()["join_intents"] == [
+            "customer_id = SALES.customer.customer_id (source: SALES.inv_v)",
+        ]
+
     def test_views_are_sorted_and_views_of_kind_view_are_excluded(self):
         result = sales_result()
         result.tables = [

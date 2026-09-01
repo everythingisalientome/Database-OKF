@@ -146,3 +146,36 @@ def test_stats_timestamps_are_recorded_as_dates(adapter):
     ]
     stats, _warnings = adapter.parse_column_stats(rows)
     assert stats[0].stats_date == date(2026, 8, 20)
+
+
+# -- A7/A8 — session 6b ------------------------------------------------------
+
+
+def test_a7_views_and_routines_arrive_through_their_own_shapes(adapter):
+    views, _ = adapter.parse_code_objects(
+        [("public", "album_titles", "SELECT 1;")], key="A7"
+    )
+    assert [(v.kind, v.definition) for v in views] == [("VIEW", "SELECT 1;")]
+
+    routines, _ = adapter.parse_code_objects(
+        [
+            ("public", "rig_dynamic_count", "FUNCTION", "BEGIN END"),
+            ("public", "c_internal", "FUNCTION", None),
+        ],
+        key="A7-routines",
+    )
+    assert [(r.kind, r.definition) for r in routines] == [
+        ("FUNCTION", "BEGIN END"),
+        ("FUNCTION", None),  # opaque body: recorded, counted unparsed later
+    ]
+
+
+def test_a8_foreign_servers_are_recorded_lineage(adapter):
+    references, _ = adapter.parse_external_references(
+        [("files_srv", "postgres_fdw")]
+    )
+    [reference] = references
+    assert reference.kind == "foreign-server"
+    assert reference.target == "files_srv"
+    assert reference.detail == "postgres_fdw"
+    assert reference.source == "pg_foreign_server"

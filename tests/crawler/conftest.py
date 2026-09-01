@@ -99,6 +99,9 @@ def pg_rows() -> dict:
         "A2": list(PG_A2_ROWS),
         "A3": list(PG_A3_ROWS),
         "A4": list(PG_A4_ROWS),
+        "A7": [],
+        "A7-routines": [],
+        "A8": [],
         "A6": list(PG_A6_ROWS),
         "A5": list(PG_A5_ROWS),
     }
@@ -122,6 +125,9 @@ MSSQL_ROWS = {
          None, None, None, None),
     ],
     "A4": [("dbo", "album", "pk_album", True, "album_id", 1)],
+    "A7": [],
+    "A8": [],
+    "A8-synonyms": [],
     "A6": [("dbo", "album", 347)],
     "A6-columns": [("dbo", "album", "album_id", 347, 347, STATS_DATE, 347)],
     "A5": [(1,)],
@@ -143,6 +149,7 @@ TERADATA_ROWS = {
     "A2": [("FINANCE", "ACCOUNT", "ACCT_ID", 1, "I", 4, None, None, "N", None)],
     "A3": [("FINANCE", "ACCOUNT", "PK_ACCOUNT", 1, "K", "ACCT_ID", 1)],
     "A4": [("FINANCE", "ACCOUNT", None, 1, "P", "N", "ACCT_ID", 1)],
+    "A7": [],
     "A6": [("FINANCE", "ACCOUNT", "ACCT_ID", 4811002, 4811002, 0, STATS_DATE)],
     "A5": [(1,)],
 }

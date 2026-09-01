@@ -354,6 +354,134 @@ class TestIndexAndBundle:
 # -- on disk --------------------------------------------------------------------
 
 
+class TestJoinIntentAndCodeObjects:
+    """Session 6b: A7/A8 derived facts in the bundle — and nothing more.
+
+    Definitions live in the crawl JSON only; the bundle carries per-column
+    join-intent lines, the unparsed-object count, and the recorded external
+    references, all [observed]."""
+
+    DEFINITION = (
+        "SELECT al.title, ar.name FROM album al "
+        "JOIN artist ar ON al.artist_id = ar.artist_id;"
+    )
+
+    def code_result(self) -> CrawlResult:
+        from crawler.results import (
+            CodeObject, ExternalReference, JoinIntent, QueryRun,
+        )
+
+        schema = "MAIN"
+        result = CrawlResult(
+            database="MUSICSTORE_MAIN",
+            engine="postgres",
+            crawl_date=date(2026, 8, 31),
+            tables=[
+                Table(schema, "album", "BASE TABLE"),
+                Table(schema, "artist", "BASE TABLE"),
+                Table(schema, "album_titles", "VIEW"),
+            ],
+            columns=[
+                Column(schema, "album", "album_id", 1, "INT", "integer", False),
+                Column(schema, "album", "artist_id", 2, "INT", "integer", False),
+                Column(schema, "artist", "artist_id", 1, "INT", "integer", False),
+            ],
+            reconciliation=Reconciliation(
+                status="COMPLETE", cataloged_tables=2, note="all accounted for"
+            ),
+        )
+        result.table_stats = [
+            TableStats(schema, "album", 347),
+            TableStats(schema, "artist", 275),
+        ]
+        result.queries = [
+            QueryRun(key="A7", query_id="A7", variant="postgres",
+                     sql="...", status="ok", rows=1),
+        ]
+        result.code_objects = [
+            CodeObject(schema=schema, name="album_titles", kind="VIEW",
+                       definition=self.DEFINITION, status="parsed"),
+            CodeObject(schema=schema, name="secret_proc", kind="PROCEDURE",
+                       definition="EXEC('DROP nothing') -- password=hunter2",
+                       status="unparsed", reason="dynamic-sql"),
+        ]
+        result.join_intents = [
+            JoinIntent(schema=schema, table="album", column="artist_id",
+                       other_schema=schema, other_table="artist",
+                       other_column="artist_id",
+                       source=f"{schema}.album_titles"),
+        ]
+        result.external_references = [
+            ExternalReference(target="BILLING_DW", kind="linked-server",
+                              source="sys.servers", detail="tcp:dw.internal"),
+        ]
+        return result
+
+    def test_both_sides_carry_the_join_intent_line(self):
+        result = self.code_result()
+        prepared = prepare(result, null_annotations(result))
+        album, artist = prepared.tables
+        assert [l.render() for l in album.column("artist_id").lines] == [
+            "- [observed] type: INT, not null",
+            "- [observed] join-intent: artist_id = MAIN.artist.artist_id "
+            "(source: MAIN.album_titles)",
+            f"- [inferred:low] {INSUFFICIENT}",
+        ]
+        assert (
+            "- [observed] join-intent: artist_id = MAIN.album.artist_id "
+            "(source: MAIN.album_titles)"
+        ) in [l.render() for l in artist.column("artist_id").lines]
+
+    def test_the_index_counts_the_unparsed_and_records_the_lineage(self):
+        result = self.code_result()
+        prepared = prepare(result, null_annotations(result))
+        rendered = [l.render() for l in prepared.index.summary]
+        assert rendered[1:] == [
+            "- [observed] code_objects: 2; unparsed: 1",
+            "- [observed] external-reference: linked-server BILLING_DW "
+            "[tcp:dw.internal] (source: sys.servers)",
+        ]
+
+    def test_a_crawl_that_never_ran_a7_says_nothing(self):
+        result = self.code_result()
+        result.queries = []
+        result.code_objects = []
+        result.join_intents = []
+        result.external_references = []
+        prepared = prepare(result, null_annotations(result))
+        assert len(prepared.index.summary) == 1  # the database summary only
+
+    def test_definitions_never_reach_the_bundle(self, tmp_path):
+        """The rule that makes A7 safe to run on procedure text: the crawl
+        JSON gets the SQL, the bundle only ever the derived facts."""
+        result = self.code_result()
+        emission = emit(result, null_annotations(result), tmp_path)
+        for path in emission.documents:
+            text = path.read_text(encoding="utf-8")
+            assert "hunter2" not in text
+            assert "EXEC(" not in text
+            assert self.DEFINITION not in text
+        assert "secret_proc" not in "".join(
+            p.read_text(encoding="utf-8") for p in emission.documents
+        )
+
+    def test_the_emitted_bundle_with_join_intent_passes_the_validator(
+        self, tmp_path
+    ):
+        result = self.code_result()
+        emission = emit(result, null_annotations(result), tmp_path)
+        bundle = read_database_bundle(emission.root)
+        issues = validate_bundle(bundle)
+        assert okf_errors(issues) == [], [str(i) for i in issues]
+        # And the observed metadata lines do not count against the 3-6
+        # sentence description guideline (they are facts, not prose).
+        codes = {i.code for i in issues}
+        album = bundle.table("album")
+        line = album.column("artist_id").find("join-intent")
+        assert line is not None and line.provenance.is_observed
+        assert codes <= {"I007"}  # the one-sentence null summary, at most
+
+
 class TestEmitToDisk:
     def test_the_emitted_bundle_passes_the_validator(self, tmp_path):
         result = sales_result()

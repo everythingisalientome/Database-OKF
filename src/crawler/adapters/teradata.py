@@ -22,7 +22,16 @@ Three Teradata specifics matter more than the rest:
 
 from __future__ import annotations
 
-from ..results import Column, ColumnStats, Constraint, Index, Table, TableStats
+from ..results import (
+    CodeObject,
+    Column,
+    ColumnStats,
+    Constraint,
+    ExternalReference,
+    Index,
+    Table,
+    TableStats,
+)
 from ..types import canonical_type
 from .base import (
     Adapter,
@@ -79,6 +88,17 @@ INDEX_CONSTRAINT_KINDS = {"K": "PRIMARY KEY", "U": "UNIQUE"}
 
 #: DBC.StatsV rows for multi-column statistics list the columns in one field.
 MULTI_COLUMN_SEPARATOR = ","
+
+#: DBC.TablesV.TableKind values the A7-TD block selects. 'E' is a
+#: foreign-server object — the catalog's answer to A8 on this engine — and
+#: is read by :meth:`TeradataAdapter.parse_external_references`, not here.
+CODE_OBJECT_KINDS = {"V": "VIEW", "M": "MACRO", "P": "PROCEDURE"}
+FOREIGN_SERVER_KIND = "E"
+
+#: DBC.TablesV.RequestText is cut at roughly this many characters. The
+#: catalog's instruction: flag truncated objects rather than parse partial
+#: SQL — a definition at or past the cut is never mined.
+REQUEST_TEXT_LIMIT = 12500
 
 
 def teradata_type(code, length=None, total_digits=None, fractional_digits=None) -> str:
@@ -239,6 +259,52 @@ class TeradataAdapter(Adapter):
             )
         indexes.sort(key=lambda i: (i.schema, i.table, i.name or "", i.columns))
         return indexes, []
+
+    # -- A7-TD: code-object definitions (answers A8 too) --------------------
+
+    def parse_code_objects(self, rows: Rows, *, key: str = "A7") -> Parsed:
+        """Views, macros and procedures from DBC.TablesV.
+
+        ``RequestText`` is NOT trimmed the way dictionary names are — it is
+        SQL, and leading whitespace is content. A text at or past the
+        dictionary's cut is flagged truncated so the extractor counts it
+        unparsed instead of mining half a statement.
+        """
+        objects = []
+        for schema, name, table_kind, request_text in rows:
+            code = (as_text(table_kind) or "").upper()
+            kind = CODE_OBJECT_KINDS.get(code)
+            if kind is None:
+                continue  # 'E' rows are external references, read below
+            definition = request_text if isinstance(request_text, str) else None
+            objects.append(
+                CodeObject(
+                    schema=as_text(schema),
+                    name=as_text(name),
+                    kind=kind,
+                    definition=definition,
+                    truncated=(
+                        definition is not None
+                        and len(definition) >= REQUEST_TEXT_LIMIT
+                    ),
+                )
+            )
+        return objects, []
+
+    def parse_external_references(self, rows: Rows, *, key: str = "A7") -> Parsed:
+        """TableKind 'E' rows — foreign-server objects. The catalog: Teradata
+        has no A8 block because these surface here (UNTESTED until a dry
+        run, like everything else on this adapter)."""
+        references = [
+            ExternalReference(
+                target=f"{as_text(schema)}.{as_text(name)}",
+                kind="foreign-server",
+                source="DBC.TablesV",
+            )
+            for schema, name, table_kind, _request_text in rows
+            if (as_text(table_kind) or "").upper() == FOREIGN_SERVER_KIND
+        ]
+        return references, []
 
     # -- A6-TD: dictionary statistics --------------------------------------
 

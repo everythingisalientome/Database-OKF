@@ -127,9 +127,11 @@ def test_all_eleven_chinook_tables_are_cataloged(any_crawl):
 
 
 def test_every_table_has_its_columns(any_crawl):
+    base = {t.name for t in any_crawl.base_tables}
     counts = {}
     for column in any_crawl.columns:
-        counts[column.table] = counts.get(column.table, 0) + 1
+        if column.table in base:
+            counts[column.table] = counts.get(column.table, 0) + 1
     assert counts == CHINOOK_COLUMN_COUNTS
 
 
@@ -262,7 +264,7 @@ def test_system_schemas_are_excluded_and_recorded(any_crawl):
 def test_the_allowlist_holds_this_crawls_identifiers(any_crawl):
     allowlist = AllowList.from_obj(any_crawl.allowlist)
     schema = _schema(any_crawl)
-    assert len(allowlist) == 11
+    assert len(allowlist) == 12  # 11 base tables + the 6b rig view
     assert allowlist.qualify(schema, "invoice_line") == f"{schema}.invoice_line"
     assert allowlist.column_names(schema, "album") == (
         "album_id", "title", "artist_id",
@@ -299,7 +301,7 @@ def test_postgres_reports_its_own_type_spellings(postgres_crawl):
 def test_postgres_runs_every_tier_a_query(postgres_crawl):
     """Nothing is skipped any more: P1 and P2 closed the last two holes."""
     assert [q.key for q in postgres_crawl.queries] == [
-        "A1", "A2", "A3", "A4", "A6", "A5",
+        "A1", "A2", "A3", "A4", "A7", "A7-routines", "A8", "A6", "A5",
     ]
     assert all(q.status == "ok" for q in postgres_crawl.queries)
 
@@ -354,7 +356,8 @@ def test_sqlserver_reports_its_own_type_spellings(sqlserver_crawl):
 def test_sqlserver_runs_both_a6_blocks(sqlserver_crawl):
     """P3 adopted, live: A6 is two statements on this engine."""
     assert [q.key for q in sqlserver_crawl.queries] == [
-        "A1", "A2", "A3", "A4", "A6", "A6-columns", "A5",
+        "A1", "A2", "A3", "A4", "A7", "A8", "A8-synonyms",
+        "A6", "A6-columns", "A5",
     ]
     assert all(q.status == "ok" for q in sqlserver_crawl.queries)
 
@@ -379,3 +382,42 @@ def test_sqlserver_column_statistics_are_marked_approximate(sqlserver_crawl):
 def test_sqlserver_excludes_its_own_system_schemas(sqlserver_crawl):
     assert "INFORMATION_SCHEMA" not in {t.schema for t in sqlserver_crawl.tables}
     assert "sys" not in {t.schema for t in sqlserver_crawl.tables}
+
+
+# -- session 6b: A7/A8 against the rig's own code objects -------------------
+
+
+def test_the_rig_view_is_cataloged_as_a_view(any_crawl):
+    views = {t.name for t in any_crawl.tables if not t.is_base_table}
+    assert views == {"album_artist_names"}
+    assert len(any_crawl.base_tables) == 11  # the view moved no goalposts
+
+
+def test_the_views_join_is_mined_into_one_intent_fact(any_crawl):
+    schema = _schema(any_crawl)
+    facts = {
+        (f.qualified, f.other_qualified, f.source)
+        for f in any_crawl.join_intents
+    }
+    assert facts == {
+        (
+            f"{schema}.album.artist_id",
+            f"{schema}.artist.artist_id",
+            f"{schema}.album_artist_names",
+        )
+    }
+
+
+def test_the_dynamic_object_is_counted_as_unparsed(any_crawl):
+    by_name = {o.name: o for o in any_crawl.code_objects}
+    assert by_name["album_artist_names"].status == "parsed"
+    assert by_name["album_artist_names"].kind == "VIEW"
+    assert by_name["rig_dynamic_count"].status == "unparsed"
+    assert by_name["rig_dynamic_count"].reason == "dynamic-sql"
+    assert any_crawl.unparsed_code_objects == 1
+
+
+def test_a7_and_a8_ran_and_the_rig_has_no_lineage(any_crawl):
+    ran = {q.query_id for q in any_crawl.queries if q.status == "ok"}
+    assert {"A7", "A8"} <= ran
+    assert any_crawl.external_references == []

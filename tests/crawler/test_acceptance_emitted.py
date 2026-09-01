@@ -61,3 +61,41 @@ def test_the_emitted_bundle_passes_the_validator(measured, tmp_path):
     # one per column, one Purpose per table, one database summary.
     columns = sum(len(t.columns) for t in bundle.tables)
     assert len(bundle.needs_review) == columns + CHINOOK_TABLES + 1
+
+
+def test_join_intent_lines_land_on_both_sides_and_the_index_counts(
+    measured, tmp_path
+):
+    """Session 6b's acceptance, emitted: the rig view's ON predicate as
+    [observed] join-intent lines on album.artist_id and artist.artist_id,
+    the unparsed count in index.md, and no definition text anywhere."""
+    schema = {"postgres": "public", "sqlserver": "dbo"}[measured.engine]
+    annotations = annotate(measured, NullAnnotator())
+    emission = emit(measured, annotations, tmp_path)
+    bundle = read_database_bundle(emission.root)
+    assert okf_errors(validate_bundle(bundle)) == []
+
+    album = bundle.table("album").column("artist_id")
+    artist = bundle.table("artist").column("artist_id")
+    source = f"{schema}.album_artist_names"
+    assert (
+        album.value("join-intent")
+        == f"artist_id = {schema}.artist.artist_id (source: {source})"
+    )
+    assert (
+        artist.value("join-intent")
+        == f"artist_id = {schema}.album.artist_id (source: {source})"
+    )
+    for line in (album.find("join-intent"), artist.find("join-intent")):
+        assert line.provenance.is_observed
+
+    assert bundle.index.summary[1].text == "code_objects: 2; unparsed: 1"
+    assert bundle.index.summary[1].provenance.is_observed
+
+    # Definitions stay in the crawl JSON: no object SQL reaches the bundle.
+    everything = "".join(
+        p.read_text(encoding="utf-8")
+        for p in emission.root.rglob("*.md")
+    )
+    assert "EXEC" not in everything
+    assert "QUOTENAME" not in everything

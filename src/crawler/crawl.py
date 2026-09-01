@@ -34,7 +34,16 @@ from datetime import date
 from . import gaps as gaps_module
 from .adapters import Adapter, for_engine
 from .allowlist import AllowList
-from .catalog import COLUMN_STATS, REQUIRED, TABLE_STATS, TIER_A
+from .catalog import (
+    ANSWERED_ELSEWHERE,
+    CODE_OBJECTS,
+    COLUMN_STATS,
+    EXTERNAL_REFS,
+    REQUIRED,
+    TABLE_STATS,
+    TIER_A,
+)
+from .codeobjects import mine
 from .config import CrawlConfig
 from .errors import QueryError
 from .execute import Connection, run_statement
@@ -53,6 +62,10 @@ from .schemas import is_system_schema
 
 #: The A6 statement keys, in run order. One query id, up to two blocks.
 STATS_KEYS = ("A6", "A6-columns")
+
+#: The A7/A8 statement keys, in run order — after A4, per the catalog's
+#: run-order line. One query id, up to two blocks, same shape as A6.
+CODE_KEYS = ("A7", "A7-routines", "A8", "A8-synonyms")
 
 
 def crawl(
@@ -146,6 +159,8 @@ def crawl(
         i for i in runner.read("A4", adapter.parse_indexes) if in_scope(i.schema)
     ]
 
+    _crawl_code_objects(runner, config, adapter, result, in_scope)
+
     if adapter.statement("A6") is None:
         # No dictionary statistics at all for this engine. A missing
         # A6-columns is not a gap — it is the normal case, for every engine
@@ -185,6 +200,53 @@ def crawl(
 
     result.reconciliation = _reconcile(runner, config, result)
     return result
+
+
+def _crawl_code_objects(runner, config, adapter, result, in_scope) -> None:
+    """A7/A8: read code-object definitions and reference inventories, then
+    mine the definitions (:mod:`crawler.codeobjects`).
+
+    Definitions land in the crawl result — the crawl JSON — only; emission
+    reads the derived facts and never the text. A query id with no block at
+    all is a recorded skip, unless the catalog documents it as answered
+    inside another block (Teradata's A8 rides on A7).
+    """
+    collected = []
+    for query_id in ("A7", "A8"):
+        if any(
+            adapter.statement(key) is not None
+            for key in CODE_KEYS
+            if key.split("-")[0] == query_id
+        ):
+            continue
+        if (config.engine, query_id) in ANSWERED_ELSEWHERE:
+            continue
+        runner.skip(query_id)
+
+    for key in CODE_KEYS:
+        statement = adapter.statement(key)
+        if statement is None:
+            continue
+        rows = runner.rows(key)
+        if rows is None:
+            continue
+        if CODE_OBJECTS in statement.provides:
+            objects = runner.parse(
+                lambda r: adapter.parse_code_objects(r, key=key), rows
+            )
+            collected.extend(o for o in objects if in_scope(o.schema))
+        if EXTERNAL_REFS in statement.provides:
+            references = runner.parse(
+                lambda r: adapter.parse_external_references(r, key=key), rows
+            )
+            result.external_references.extend(references)
+
+    mined = mine(collected, result.tables, result.columns)
+    result.code_objects = mined.objects
+    result.join_intents = mined.join_intents
+    result.external_references.extend(mined.external_references)
+    result.external_references.sort(key=lambda r: (r.kind, r.target, r.source))
+    result.warnings.extend(mined.warnings)
 
 
 def _scope_filter(config: CrawlConfig):

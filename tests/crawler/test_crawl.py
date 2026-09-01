@@ -48,7 +48,9 @@ def test_runs_exactly_the_catalog_statements_for_the_engine(pg_connection, resul
 
 def test_reconciliation_runs_last(result):
     ran = [q.key for q in result.queries if q.status == "ok"]
-    assert ran == ["A1", "A2", "A3", "A4", "A6", "A5"]
+    assert ran == [
+        "A1", "A2", "A3", "A4", "A7", "A7-routines", "A8", "A6", "A5",
+    ]
 
 
 def test_nothing_is_skipped_now_the_catalog_is_complete(result):
@@ -370,7 +372,8 @@ def test_sqlserver_runs_both_a6_blocks(mssql_rows):
         FakeConnection(responses_for("sqlserver", mssql_rows)), config, today=CRAWL_DATE
     )
     assert [q.key for q in result.queries] == [
-        "A1", "A2", "A3", "A4", "A6", "A6-columns", "A5",
+        "A1", "A2", "A3", "A4", "A7", "A8", "A8-synonyms",
+        "A6", "A6-columns", "A5",
     ]
     assert [q.query_id for q in result.queries].count("A6") == 2
     assert result.indexes[0].name == "pk_album"
@@ -435,6 +438,119 @@ def test_the_result_is_json_and_survives_a_round_trip(result):
     assert restored.crawl_date == CRAWL_DATE
     assert restored.columns[0] == result.columns[0]
     assert restored.scope == result.scope
+
+
+# -- A7/A8: code objects, join intent, external references (session 6b) -----
+
+#: The view definition the way PostgreSQL's dictionary re-renders it.
+ALBUM_TITLES_DEF = (
+    " SELECT al.title,\n    ar.name\n"
+    "   FROM (album al\n"
+    "     JOIN artist ar ON ((al.artist_id = ar.artist_id)));"
+)
+
+
+def pg_rows_with_code_objects(pg_rows):
+    pg_rows["A7"] = [("public", "album_titles", ALBUM_TITLES_DEF)]
+    pg_rows["A7-routines"] = [
+        ("public", "rig_dynamic_count", "FUNCTION",
+         "\nDECLARE n bigint;\nBEGIN\n    EXECUTE 'SELECT COUNT(*) FROM '"
+         " || tbl INTO n;\n    RETURN n;\nEND "),
+    ]
+    return pg_rows
+
+
+def test_the_view_join_becomes_a_join_intent_fact(pg_rows):
+    result = crawl(
+        FakeConnection(responses_for("postgres", pg_rows_with_code_objects(pg_rows))),
+        pg_config(),
+        today=CRAWL_DATE,
+    )
+    (fact,) = result.join_intents
+    assert fact.qualified == "public.album.artist_id"
+    assert fact.other_qualified == "public.artist.artist_id"
+    assert fact.source == "public.album_titles"
+
+
+def test_the_dynamic_object_is_counted_never_guessed(pg_rows):
+    result = crawl(
+        FakeConnection(responses_for("postgres", pg_rows_with_code_objects(pg_rows))),
+        pg_config(),
+        today=CRAWL_DATE,
+    )
+    by_name = {o.name: o for o in result.code_objects}
+    assert by_name["album_titles"].status == "parsed"
+    assert by_name["rig_dynamic_count"].status == "unparsed"
+    assert by_name["rig_dynamic_count"].reason == "dynamic-sql"
+    assert result.unparsed_code_objects == 1
+    assert any(
+        "rig_dynamic_count" in w and "unparsed" in w for w in result.warnings
+    )
+    # A7 does not shake the crawl's completeness: nothing failed to run.
+    assert result.reconciliation.status == "COMPLETE"
+
+
+def test_definitions_land_in_the_crawl_json_and_round_trip(pg_rows):
+    result = crawl(
+        FakeConnection(responses_for("postgres", pg_rows_with_code_objects(pg_rows))),
+        pg_config(),
+        today=CRAWL_DATE,
+    )
+    obj = json.loads(json.dumps(result.to_obj()))
+    stored = {o["name"]: o["definition"] for o in obj["code_objects"]}
+    assert stored["album_titles"] == ALBUM_TITLES_DEF
+    restored = CrawlResult.from_obj(obj)
+    assert restored.join_intents == result.join_intents
+    assert restored.code_objects == result.code_objects
+
+
+def test_code_objects_outside_the_crawls_scope_are_not_mined(pg_rows):
+    pg_rows["A7"] = [
+        ("archive", "old_view",
+         "SELECT a.title FROM album a JOIN artist b"
+         " ON a.artist_id = b.artist_id"),
+    ]
+    result = crawl(
+        FakeConnection(responses_for("postgres", pg_rows)),
+        pg_config(),
+        today=CRAWL_DATE,
+    )
+    assert result.code_objects == []
+    assert result.join_intents == []
+
+
+def test_a_failed_a7_downgrades_reconciliation(pg_rows):
+    responses = responses_for("postgres", pg_rows)
+    responses[catalog.statement("postgres", "A7").sql] = PermissionError(
+        "permission denied for information_schema.views"
+    )
+    result = crawl(FakeConnection(responses), pg_config(), today=CRAWL_DATE)
+    assert result.reconciliation.status == "INCOMPLETE"
+    assert any("A7 failed" in w for w in result.warnings)
+
+
+def test_teradata_a8_is_answered_by_a7_not_skipped(teradata_rows):
+    """The catalog: foreign-server objects surface in A7's TableKind kinds.
+    So A8 must not appear as a skip, and a 'E' row must land as lineage."""
+    teradata_rows["A7"] = [
+        ("FINANCE", "ACCT_V", "V",
+         "REPLACE VIEW FINANCE.ACCT_V AS SELECT a.ACCT_ID FROM ACCOUNT a"),
+        ("FINANCE", "REMOTE_FEED", "E", None),
+    ]
+    config = CrawlConfig.from_obj(
+        {"database": "SOR_FINANCE", "engine": "teradata"}
+    )
+    result = crawl(
+        FakeConnection(responses_for("teradata", teradata_rows)),
+        config,
+        today=CRAWL_DATE,
+    )
+    assert not any(q.query_id == "A8" for q in result.queries)
+    assert not any("A8" in w for w in result.warnings)
+    [reference] = result.external_references
+    assert reference.kind == "foreign-server"
+    assert reference.target == "FINANCE.REMOTE_FEED"
+    assert reference.source == "DBC.TablesV"
 
 
 def test_two_runs_of_an_unchanged_database_are_identical(pg_rows):

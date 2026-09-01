@@ -21,20 +21,24 @@ PROPOSALS = "catalog/proposals/step1-catalog-gaps.md"
 def extract_blocks(text: str):
     """Every fenced ```sql block in the catalog, with its heading and context.
 
-    Returns ``[(heading, context, sql)]``. ``context`` is the prose since the
-    last block or heading — which is where a block says which engine it is
-    for, sometimes as a bare ``ANSI:`` label and sometimes as a sentence.
-    Empty blocks are skipped: they carry no SQL to check.
+    Returns ``[(heading, context, sql)]``. ``context`` is the prose above the
+    block — which is where a block says which engine it is for, sometimes as
+    a bare ``ANSI:`` label and sometimes as a sentence. One label can govern
+    several back-to-back blocks (A7's "ANSI/PostgreSQL (views; PG functions
+    via information_schema.routines):" is followed by both), so context
+    carries across consecutive blocks and resets only when new prose or a
+    heading arrives. Empty blocks are skipped: they carry no SQL to check.
     """
     lines = text.split("\n")
     heading = ""
     context: list[str] = []
+    after_block = False
     blocks = []
     index = 0
     while index < len(lines):
         line = lines[index]
         if line.startswith("#"):
-            heading, context = line.lstrip("#").strip(), []
+            heading, context, after_block = line.lstrip("#").strip(), [], False
         elif line.startswith("```sql"):
             body = []
             index += 1
@@ -44,8 +48,10 @@ def extract_blocks(text: str):
             sql = "\n".join(body).strip()
             if sql:
                 blocks.append((heading, "\n".join(context), sql))
-            context = []
+            after_block = True
         elif line.strip():
+            if after_block:
+                context, after_block = [], False
             context.append(line.strip())
         index += 1
     return blocks
@@ -142,9 +148,22 @@ def test_every_engine_can_inventory(engine):
 
 @pytest.mark.parametrize("engine", catalog.ENGINES)
 def test_the_catalog_covers_every_tier_a_query(engine):
-    """Since the P1-P7 adoptions, every engine has a block for every query."""
-    covered = {stmt.query_id for stmt in catalog.statements_for(engine)}
-    assert covered == set(catalog.QUERY_IDS)
+    """Every engine answers every query — with a block of its own, or, where
+    the catalog documents it, inside another query's block (Teradata's A8
+    rides on A7's TableKind 'E' rows)."""
+    assert catalog.covered_query_ids(engine) == set(catalog.QUERY_IDS)
+
+
+def test_answered_elsewhere_is_backed_by_a_real_statement():
+    """The Teradata A8 mapping is only honest if the A7 block actually
+    provides the external-references reader its rows feed."""
+    for (engine, query_id), via in catalog.ANSWERED_ELSEWHERE.items():
+        assert catalog.statement(engine, query_id) is None, (
+            f"{engine}/{query_id} has its own block; the mapping is stale"
+        )
+        answering = catalog.statement(engine, via)
+        assert answering is not None
+        assert catalog.EXTERNAL_REFS in answering.provides
 
 
 @pytest.mark.parametrize("engine", catalog.ENGINES)
@@ -157,7 +176,7 @@ def test_missing_statements_are_declared_gaps(engine):
     declared = {
         gap.query_id for gap in gaps.gaps_for(engine) if not gap.partial
     }
-    covered = {stmt.query_id for stmt in catalog.statements_for(engine)}
+    covered = catalog.covered_query_ids(engine)
     for query_id in catalog.QUERY_IDS:
         if query_id not in covered:
             assert query_id in declared, (
@@ -233,6 +252,43 @@ def test_proposed_sql_is_not_registered(request):
             f"{statement.key}/{statement.variant} runs SQL that is only "
             "proposed, not adopted into the catalog"
         )
+
+
+def test_the_catalogs_run_order_line_is_fully_adopted(request):
+    """The reverse drift guard: a query the catalog's run-order line names
+    must be registered (or documented as answered elsewhere) for every
+    engine.
+
+    This is the direction the original drift tests did not cover — code SQL
+    had to come from the catalog, but the catalog could adopt a query (A7/A8
+    did, ahead of session 6b) without anything failing. Now it fails here.
+    """
+    text = (
+        request.config.rootpath / "catalog" / "step1-query-catalog.md"
+    ).read_text(encoding="utf-8")
+    line = next(
+        l for l in text.split("\n") if l.startswith("Run order per database:")
+    )
+    ordered = re.findall(r"\b([ABC]\d+)\b", line)
+    tier_a = [q for q in ordered if q.startswith("A") and q != "A5"] + ["A5"]
+    tier_bc = [q for q in ordered if not q.startswith("A")]
+
+    assert set(tier_a) <= set(catalog.QUERY_IDS), (
+        "the catalog's run-order line names a Tier A query the code has not "
+        f"adopted: {sorted(set(tier_a) - set(catalog.QUERY_IDS))}"
+    )
+    assert set(tier_bc) == set(catalog.TEMPLATE_IDS)
+    for engine in catalog.ENGINES:
+        assert set(tier_a) <= catalog.covered_query_ids(engine)
+
+    # And the code runs them in the line's order (A6 is stats-first and
+    # absent from the line; the relative order of the named ids is checked).
+    code_order = []
+    for key in catalog.TIER_A:
+        query_id = key.split("-")[0]
+        if query_id in tier_a and query_id not in code_order:
+            code_order.append(query_id)
+    assert code_order == tier_a
 
 
 def test_unverified_engines_are_flagged():

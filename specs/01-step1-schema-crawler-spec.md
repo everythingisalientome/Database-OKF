@@ -16,7 +16,11 @@ No process context. No dynamic SQL. Deterministic crawl + LLM annotation pass.
 
 ## Execution order (per database)
 
-1. **A1–A4, A6**: table inventory, column inventory, constraints, indexes,
+1. **A1–A4, A6** (and A7/A8 after A4: code-object definitions into the
+   crawl JSON only — never bundles; conservative join-intent extraction emits
+   per-column `[observed] join-intent: <col> = <schema.table.col>
+   (source: <object>)` lines, external references into index.md, and an
+   unparsed-object count into index.md): table inventory, column inventory, constraints, indexes,
    and dictionary column statistics (stats-first: B1/B2 scans run only where
    stats are missing or stale; profile lines record their source and date).
    Build the identifier allow-list from A1/A2 output.
